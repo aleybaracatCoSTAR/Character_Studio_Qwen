@@ -16,6 +16,8 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 
 This first version uses **one recorded turn, then one reply**. It does not implement simultaneous speech, streaming audio, voice cloning, model training or the full existing Character Studio feature set.
 
+The initial GPU trial has been reported as too slow for a live conversation. See [the voice behaviour and streaming runtime notes](docs/LIVE_VOICE.md) for the confirmed bottlenecks and the distinction between this baseline and a live call.
+
 ## Preview on your laptop
 
 Use Python 3.10+ or `uv` (the setup script uses Python 3.12 with uv).
@@ -50,6 +52,10 @@ Follow **[the Surrey guide](docs/SURREY.md)**. The starting target is one alloca
 | `slurm/` | Optional batch job for Surrey |
 
 Read [architecture](docs/ARCHITECTURE.md) for the request flow and [handoff notes](docs/HANDOFF.md) for validation, limitations and the next tests.
+
+## Optional voice comparison: Drama 3
+
+[Drama 3 test instructions](experiments/drama3/README.md) prepare a separate TTS server and three Anna voice samples, with streamed first-audio timing and playable WAV output. This tests expressive delivery; Drama 3 is not a speech-to-speech conversational model. It uses its own environment and does not replace the Qwen backend.
 
 ## Checks without a GPU
 

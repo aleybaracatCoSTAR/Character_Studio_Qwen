@@ -1,4 +1,5 @@
 .venv/
+.venv-drama3/
 __pycache__/
 *.py[cod]
 .env

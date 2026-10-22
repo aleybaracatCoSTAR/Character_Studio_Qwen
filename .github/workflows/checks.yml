@@ -19,3 +19,4 @@ jobs:
       - run: python -m compileall -q studio scripts tests
       - run: node --check frontend/app.js && node --check frontend/recorder-worklet.js
       - run: bash -n scripts/setup.sh scripts/run.sh slurm/qwen-studio.sbatch
+      - run: bash -n experiments/drama3/setup.sh experiments/drama3/download.sh experiments/drama3/run.sh

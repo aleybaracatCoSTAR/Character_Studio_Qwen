@@ -10,9 +10,11 @@ Character editing, browser-local character saving, JSON download, prompt inspect
 
 ## Validation and remaining work
 
+Update, 22 October 2026: the user has launched the baseline on Surrey and reports that it is too slow and does not provide the intended live speech experience. We have not observed a completed inference trace or measured that session. See `LIVE_VOICE.md`; the streaming runtime change remains outstanding. A separate Drama 3 TTS evaluation client has five additional CPU tests (28 tests total), but its GPU inference has not been run here.
+
 23 CPU tests pass, covering WAV validation/resampling, prompt construction, history ordering, failure rollback, session isolation, concurrent-request rejection and HTTP responses. JavaScript and shell syntax checks also pass. Preview mode has been inspected in a browser, including editing a name, inspecting the updated instructions and reloading to verify local saving. These checks do not validate inference, microphone hardware or model output quality.
 
-**GPU inference has not been run for this repository yet.** The first acceptance step is the interactive H200 recipe in `SURREY.md`. Measure peak VRAM, first response time, text-only output, recorded voice input and spoken output. Try all three speakers. Capture the model's contradictions verbatim before modifying the prompt. A passing application check is not evidence of better narrative intelligence.
+**GPU inference has not been independently validated by the agent.** Use the interactive H200 recipe in `SURREY.md` for the baseline. Measure peak VRAM, first response time, text-only output, recorded voice input and spoken output. Try all three speakers. Capture the model's contradictions verbatim before modifying the prompt. A passing application check is not evidence of better narrative intelligence.
 
 ## Pinned starting point
 
