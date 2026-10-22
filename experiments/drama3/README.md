@@ -22,18 +22,19 @@ GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull
 bash experiments/drama3/setup.sh
 ```
 
-The setup uses vLLM **0.32.0** with the pinned vLLM-Omni 0.32 development revision. Both are installed together, then their serving imports are checked before loading a model. The [official recipe](https://recipes.vllm.ai/fishaudio/drama-3) provides the serving API and hardware reference, but its older 0.31 installation pin is incompatible with this newer Omni revision. Its reference GPU is an H100 80 GB; your H200 is the intended first test target here. GPU inference still needs validation. Installation and initial compilation can take time.
+The setup uses vLLM **0.32.0** with the pinned vLLM-Omni 0.32 development revision. It explicitly installs the CUDA **13.0** wheels for Torch **2.13.0**, TorchAudio **2.11.0** and TorchVision **0.28.0**, matching [vLLM's declared dependencies](https://github.com/vllm-project/vllm/blob/v0.32.0/requirements/cuda.txt). The audio and Torch version numbers differ intentionally. Their CUDA builds must agree. All packages are installed together, then their serving imports are checked before loading a model. The [official recipe](https://recipes.vllm.ai/fishaudio/drama-3) provides the serving API and hardware reference, but its older 0.31 installation pin is incompatible with this newer Omni revision. Its reference GPU is an H100 80 GB; your H200 is the intended first test target here. GPU inference still needs validation. Installation and initial compilation can take time.
 
 ### Repair an earlier installation
 
-If you see `cannot import name 'async_request_profile'` or an Omni/vLLM version mismatch, run the updated setup again. Keep your existing model files:
+If you see `cannot import name 'async_request_profile'`, an Omni/vLLM version mismatch, or **PyTorch CUDA 13.2 vs TorchAudio CUDA 13.0**, pull the latest repository and run the updated setup again. This replaces the mismatched packages and keeps your existing model files:
 
 ```bash
+GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull --ff-only
 bash experiments/drama3/setup.sh
 .venv-drama3/bin/python experiments/drama3/check_install.py
 ```
 
-The corrected runtime dependency range is in [Omni's pinned requirements](https://github.com/vllm-project/vllm-omni/blob/798fef99a33fba3ad3c2439d6ec10fe838c0076b/requirements/common.txt); the missing function is in [vLLM 0.32.0](https://github.com/vllm-project/vllm/blob/v0.32.0/vllm/benchmarks/lib/endpoint_request_func.py). A failed GPU server never opens port 18093, so a Mac health-check failure is expected until this is repaired.
+The driver reporting CUDA 13.2 does not require CUDA 13.2 Python wheels. Do not use `--torch-backend=auto` for this environment: it can select a newer Torch build than the audio extension. The preflight requires all three package versions to end in `+cu130` and imports the actual serving CLI. The corrected runtime dependency range is in [Omni's pinned requirements](https://github.com/vllm-project/vllm-omni/blob/798fef99a33fba3ad3c2439d6ec10fe838c0076b/requirements/common.txt); the missing function is in [vLLM 0.32.0](https://github.com/vllm-project/vllm/blob/v0.32.0/vllm/benchmarks/lib/endpoint_request_func.py). A failed GPU server never opens port 18093, so a Mac health-check failure is expected until this is repaired.
 
 ## 2. Download and launch
 

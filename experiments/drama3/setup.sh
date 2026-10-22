@@ -11,7 +11,9 @@ export UV_CACHE_DIR="$DRAMA3_STORE/uv-cache"
 mkdir -p "$DRAMA3_STORE"
 nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv,noheader
 [[ -d .venv-drama3 ]] || uv venv --python 3.12 .venv-drama3
-uv pip install --python .venv-drama3/bin/python --upgrade --torch-backend=auto \
+uv pip install --python .venv-drama3/bin/python --upgrade --torch-backend=cu130 \
+  --reinstall-package torch --reinstall-package torchaudio --reinstall-package torchvision \
+  'torch==2.13.0+cu130' 'torchaudio==2.11.0+cu130' 'torchvision==0.28.0+cu130' \
   'vllm==0.32.0' \
   'vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@798fef99a33fba3ad3c2439d6ec10fe838c0076b'
 .venv-drama3/bin/python experiments/drama3/check_install.py
