@@ -71,7 +71,7 @@ node --check frontend/app.js
 node --check frontend/recorder-worklet.js
 node --input-type=module --check < frontend/live.js
 node --test tests/live_audio.test.mjs
-bash -n scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch
+for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
 46 Python tests and six JavaScript audio tests exercise app contracts, turn detection, streamed provider responses, interruption and playback acknowledgements. They use explicit test doubles for inference and do not demonstrate model quality or real GPU speed.

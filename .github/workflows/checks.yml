@@ -21,4 +21,4 @@ jobs:
       - run: node --input-type=module --check < frontend/live.js
       - run: node --check frontend/live-capture-worklet.js
       - run: node --test tests/live_audio.test.mjs
-      - run: bash -n scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch
+      - run: for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done

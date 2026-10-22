@@ -54,4 +54,4 @@ The server deliberately returns a short error rather than recording prompt/audio
 
 1. Fix actual adapter or environment failures, then preserve a successful Linux dependency lock and measured resource requirements.
 2. Evaluate a small consistent set of character-fact and false-assumption questions against both models.
-3. Only then consider streaming, performer controls, a director-note API, or integration with the existing Character Studio.
+3. Validate the new streaming mode before adding performer controls, a director-note API, or integration with the existing Character Studio.
