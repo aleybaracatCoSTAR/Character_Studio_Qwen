@@ -22,7 +22,18 @@ GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull
 bash experiments/drama3/setup.sh
 ```
 
-The setup follows the [official vLLM Drama 3 recipe](https://recipes.vllm.ai/fishaudio/drama-3): vLLM 0.31.0 plus a pinned vLLM-Omni source revision. The recipe lists one CUDA GPU with at least 48 GB, using an H100 80 GB as its reference. Your H200 is the intended first test target here, but this repository's GPU setup has not been run yet. Installation and initial compilation can take time.
+The setup uses vLLM **0.32.0** with the pinned vLLM-Omni 0.32 development revision. Both are installed together, then their serving imports are checked before loading a model. The [official recipe](https://recipes.vllm.ai/fishaudio/drama-3) provides the serving API and hardware reference, but its older 0.31 installation pin is incompatible with this newer Omni revision. Its reference GPU is an H100 80 GB; your H200 is the intended first test target here. GPU inference still needs validation. Installation and initial compilation can take time.
+
+### Repair an earlier installation
+
+If you see `cannot import name 'async_request_profile'` or an Omni/vLLM version mismatch, run the updated setup again. Keep your existing model files:
+
+```bash
+bash experiments/drama3/setup.sh
+.venv-drama3/bin/python experiments/drama3/check_install.py
+```
+
+The corrected runtime dependency range is in [Omni's pinned requirements](https://github.com/vllm-project/vllm-omni/blob/798fef99a33fba3ad3c2439d6ec10fe838c0076b/requirements/common.txt); the missing function is in [vLLM 0.32.0](https://github.com/vllm-project/vllm/blob/v0.32.0/vllm/benchmarks/lib/endpoint_request_func.py). A failed GPU server never opens port 18093, so a Mac health-check failure is expected until this is repaired.
 
 ## 2. Download and launch
 

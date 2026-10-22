@@ -10,5 +10,6 @@ if [[ -z "${SLURM_JOB_ID:-}" || -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
 fi
 [[ -x .venv-drama3/bin/vllm ]] || { echo 'Run setup.sh first.' >&2; exit 1; }
 [[ -f "$DRAMA3_MODEL_DIR/config.json" ]] || { echo 'Run download.sh first.' >&2; exit 1; }
+.venv-drama3/bin/python experiments/drama3/check_install.py
 exec .venv-drama3/bin/vllm serve "$DRAMA3_MODEL_DIR" --omni \
   --served-model-name fishaudio/drama-3 --host 127.0.0.1 --port "${DRAMA3_PORT:-18093}" "$@"
