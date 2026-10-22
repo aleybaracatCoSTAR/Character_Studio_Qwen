@@ -1,2 +1,70 @@
-# Character_Studio_Qwen
-A small character and voice studio using self-hosted Qwen3-Omni-30B-A3B-Instruct, with Surrey H200 setup and handoff notes.
+# Character Studio · Qwen
+
+A small rehearsal space for creating a character and talking to it using **Qwen3-Omni-30B-A3B-Instruct**. Edit the character on the left, then type or record a question on the right. Anna, an underappreciated washing machine in a wealthy household, is the included fictional example.
+
+**Status: starter prototype.** The application has CPU checks and a browser preview. GPU inference, spoken quality and H200 memory use still need validation on Surrey. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
+
+![Character sheet and conversation preview](docs/screenshots/studio-preview.jpg)
+
+## What it does
+
+- Editable identity, goal, environment, memories, boundaries, story moment and voice description.
+- Text or microphone input; record up to 30 seconds, listen back, then send.
+- Generated text and an audio player for Qwen's spoken reply; text-only replies are also available.
+- View the exact character instructions; download the character as JSON.
+- Local browser saving for the character; recent conversation context in server RAM.
+
+This first version uses **one recorded turn, then one reply**. It does not implement simultaneous speech, streaming audio, voice cloning, model training or the full existing Character Studio feature set.
+
+## Preview on your laptop
+
+Use Python 3.10+ or `uv` (the setup script uses Python 3.12 with uv).
+
+```bash
+git clone git@github.com:aleybaracatCoSTAR/Character_Studio_Qwen.git
+cd Character_Studio_Qwen
+bash scripts/setup.sh preview
+bash scripts/run.sh --preview
+```
+
+Open **http://127.0.0.1:18091/**. Preview mode lets you edit and inspect character instructions. It does not download Qwen or invent AI responses.
+
+## Run the real model
+
+Follow **[the Surrey guide](docs/SURREY.md)**. The starting target is one allocated H200, BF16, one generation at a time. There is no paid API key required by this app. Checkpoint storage is roughly 71 GB; allow additional room for dependencies and caches. Actual GPU requirements depend on context and must be measured.
+
+## Where everything is
+
+| File | Purpose |
+|---|---|
+| `frontend/index.html` | Page structure and character fields |
+| `frontend/styles.css` | Appearance and responsive layout |
+| `frontend/app.js` | Character editing, recording, chat and playback |
+| `frontend/recorder-worklet.js` | Microphone PCM capture |
+| `studio/app.py` | Python FastAPI server and HTTP endpoints |
+| `studio/characters.py` | Character schema and instructions sent to the model |
+| `studio/engine.py` | Qwen loading, generation and recent conversation context |
+| `studio/audio.py` | WAV validation, resampling and reply encoding |
+| `characters/anna.json` | Example character |
+| `scripts/` | Environment setup, model download and launch |
+| `slurm/` | Optional batch job for Surrey |
+
+Read [architecture](docs/ARCHITECTURE.md) for the request flow and [handoff notes](docs/HANDOFF.md) for validation, limitations and the next tests.
+
+## Checks without a GPU
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m compileall -q studio scripts tests
+node --check frontend/app.js
+node --check frontend/recorder-worklet.js
+bash -n scripts/setup.sh scripts/run.sh slurm/qwen-studio.sbatch
+```
+
+The tests exercise the app contract and use an explicit test double for inference. They do not demonstrate Qwen's quality.
+
+## Model and implementation sources
+
+The inference adapter targets **Transformers 5.2.0**, following [Qwen's current guidance](https://github.com/QwenLM/Qwen3-Omni#installation). Its generate return values were checked against the [5.2.0 implementation](https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/qwen3_omni_moe/modeling_qwen3_omni_moe.py). The checkpoint is [Qwen/Qwen3-Omni-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct), pinned in `scripts/download_model.py`.
+
+New application code is MIT licensed. Qwen model files have their own [Apache 2.0 license and model card](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct). Models, recordings, credentials and generated media are excluded from Git.

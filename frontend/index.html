@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Character Studio · Qwen</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header><a class="brand" href="/">Character Studio <span>Qwen</span></a><div id="status" role="status">Connecting…</div></header>
+  <main>
+    <aside>
+      <div class="section-heading"><h1>Your character</h1><button id="toggle-profile" class="quiet" aria-expanded="true" aria-controls="character-form">Hide details</button></div>
+      <p class="hint">Give them a point of view. Then meet them.</p>
+      <form id="character-form">
+        <label>Name<input name="name" maxlength="80" required></label>
+        <label>Who are they?<input name="role" maxlength="120"></label>
+        <label>About them<textarea name="about" maxlength="2400" rows="4"></textarea></label>
+        <label>What do they want?<textarea name="goal" maxlength="500" rows="2"></textarea></label>
+        <details><summary>World, memories & boundaries</summary>
+          <label>Environment<textarea name="environment" maxlength="700" rows="3"></textarea></label>
+          <label>Memories<textarea name="memories" maxlength="1200" rows="3"></textarea></label>
+          <label>What must stay true?<textarea name="rules" maxlength="1000" rows="3"></textarea></label>
+          <label>Current story moment<textarea name="beat" maxlength="500" rows="2"></textarea></label>
+        </details>
+        <details><summary>Voice</summary>
+          <label>How they speak<textarea name="voice_style" maxlength="500" rows="2"></textarea></label>
+          <label>Model voice<select name="speaker"><option>Chelsie</option><option>Ethan</option><option>Aiden</option></select></label>
+          <p class="hint">Stock voices. The description guides delivery; it does not clone a voice.</p>
+        </details>
+        <div class="profile-actions"><button type="button" id="prompt-button" class="quiet">View character instructions ↗</button><button type="button" id="export-button" class="quiet">Download JSON ↓</button></div>
+      </form>
+      <p class="hint small" id="save-note">Character details stay in this browser. Editing starts a new conversation.</p>
+    </aside>
+    <section class="conversation" aria-label="Character conversation">
+      <div class="conversation-heading"><div><span class="eyebrow">REHEARSAL ROOM</span><h2 id="chat-title">Meet Anna</h2></div><button class="secondary" id="new-chat">New conversation</button></div>
+      <div id="mode-note" class="notice">Checking the model…</div>
+      <div id="messages" role="log" aria-live="polite">
+        <div id="empty-state"><div class="spark">✳</div><h3>A character with something to say.</h3><p>Ask a question, challenge a belief, or give them a situation.</p><div class="suggestions"><button class="suggestion">What do you wish people understood about you?</button><button class="suggestion">What would make today different?</button></div></div>
+      </div>
+      <div class="composer-area">
+        <div id="feedback" role="status"></div>
+        <div id="recording-preview" hidden><audio id="recording-audio" controls aria-label="Your recording"></audio><button id="discard-recording" class="quiet">Remove recording</button></div>
+        <form id="chat-form" class="composer">
+          <label class="sr-only" for="message">Message your character</label><textarea id="message" maxlength="2000" rows="2" placeholder="Say something to Anna…"></textarea>
+          <div class="composer-actions"><button type="button" id="record-button" class="secondary" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span>Record</span></button><label class="audio-toggle"><input id="spoken-reply" type="checkbox" checked> Spoken reply</label><button id="send-button" type="submit" class="primary">Send ↑</button></div>
+        </form>
+        <p class="hint small center">Record, then send · One reply at a time · Last 6 exchanges kept in context</p>
+      </div>
+    </section>
+  </main>
+  <dialog id="prompt-dialog"><div class="section-heading"><h2>Character instructions</h2><button id="close-prompt" class="secondary">Close</button></div><p class="hint">These instructions guide the model. Test whether it follows them.</p><pre id="prompt-text"></pre></dialog>
+</body>
+</html>
