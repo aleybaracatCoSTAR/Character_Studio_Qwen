@@ -23,7 +23,7 @@ def main():
     from huggingface_hub import HfApi, snapshot_download
     target = Path(args.directory).expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
-    info = HfApi().model_info(MODEL_ID, revision=REVISION, files_metadata=True)
+    info = HfApi(token=False).model_info(MODEL_ID, revision=REVISION, files_metadata=True)
     needed = 0
     for item in info.siblings:
         if any(fnmatch(item.rfilename, pattern) for pattern in PATTERNS):
@@ -35,7 +35,7 @@ def main():
     if free < needed + reserve:
         parser.error(f"Need {needed / 1024**3:.1f} GiB of downloads plus 20 GiB free reserve; only {free / 1024**3:.1f} GiB available.")
     print(f"Checkpoint: {MODEL_ID}@{REVISION}\nDestination: {target}\nRemaining download: {needed / 1024**3:.1f} GiB")
-    snapshot_download(MODEL_ID, revision=REVISION, local_dir=target, allow_patterns=PATTERNS, max_workers=4)
+    snapshot_download(MODEL_ID, revision=REVISION, local_dir=target, allow_patterns=PATTERNS, max_workers=4, token=False)
     (target / "studio-checkpoint.json").write_text(json.dumps({"model": MODEL_ID, "revision": REVISION}, indent=2) + "\n")
     print("Download complete. Next: bash scripts/run.sh")
 
