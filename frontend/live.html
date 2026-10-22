@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Character Studio · Live voice</title><link rel="stylesheet" href="/static/styles.css"><link rel="stylesheet" href="/static/live.css"><script type="module" src="/static/live.js"></script></head>
+<body><header><a class="brand" href="/">Character Studio <span>Live voice</span></a><div id="status" role="status">Checking services…</div></header>
+<main><aside><div class="section-heading"><h1>Your character</h1><button id="toggle-profile" class="quiet" aria-expanded="true">Hide details</button></div><p class="hint">Set their point of view before starting the call.</p>
+<form id="character-form">
+<label>Name<input name="name" required maxlength="80"></label><label>Who are they?<input name="role" maxlength="120"></label>
+<label>About them<textarea name="about" rows="4" maxlength="2400"></textarea></label><label>What do they want?<textarea name="goal" rows="2" maxlength="500"></textarea></label>
+<details><summary>World & memories</summary><label>Environment<textarea name="environment" rows="3" maxlength="700"></textarea></label><label>Memories<textarea name="memories" rows="3" maxlength="1200"></textarea></label><label>What must stay true?<textarea name="rules" rows="3" maxlength="1000"></textarea></label><label>Current story moment<textarea name="beat" rows="2" maxlength="500"></textarea></label></details>
+<details><summary>How they speak</summary><label>Speaking style<textarea name="voice_style" rows="3" maxlength="500"></textarea></label><p class="hint small">The first generated phrase becomes the voice reference for this call. Voice consistency still needs listening tests.</p></details>
+<input type="hidden" name="speaker" value="Chelsie"></form><p class="hint small">Character details stay in this browser. End the call to edit them.</p></aside>
+<section class="conversation" aria-label="Live character conversation"><div class="conversation-heading"><div><span class="eyebrow">VOICE REHEARSAL</span><h2 id="chat-title">Talk to Anna</h2></div><span class="live-badge">Live audio</span></div>
+<p class="notice" id="mode-note">Checking speech recognition, the character model and Drama 3…</p>
+<div id="messages" role="log" aria-live="polite"><div id="empty-state"><div class="spark">✳</div><h3>A conversation, one turn at a time.</h3><p>Start the call and speak. Pause to hear a reply. Speak again to interrupt.</p></div></div>
+<div class="call-controls"><p id="call-state" role="status">Ready when you are</p><div class="call-buttons">
+<button id="start-call" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span>Start call</span></button>
+<button id="mute" class="secondary" hidden>Mute mic</button><button id="interrupt" class="secondary" hidden>Stop reply</button><button id="text-mode" class="quiet">Test with text</button></div>
+<div id="feedback" role="alert"></div><div id="timing" class="hint small"></div>
+<form id="typed-form" class="composer" hidden><label class="sr-only" for="typed-message">Message your character</label><textarea id="typed-message" rows="1" maxlength="2000" placeholder="Type a message…"></textarea><button id="send-text" class="primary" type="submit">Send ↑</button></form>
+<p class="hint small center">Automatic pause detection · Replies play as they arrive · Headphones recommended</p>
+<p class="attribution">Built with Fish Audio · Speech recognition → character model → Drama 3 voice</p></div>
+</section></main></body></html>

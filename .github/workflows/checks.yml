@@ -16,7 +16,9 @@ jobs:
           node-version: '22'
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m unittest discover -s tests -v
-      - run: python -m compileall -q studio scripts tests
+      - run: python -m compileall -q studio live_voice scripts experiments/drama3 tests
       - run: node --check frontend/app.js && node --check frontend/recorder-worklet.js
-      - run: bash -n scripts/setup.sh scripts/run.sh slurm/qwen-studio.sbatch
-      - run: bash -n experiments/drama3/setup.sh experiments/drama3/download.sh experiments/drama3/run.sh
+      - run: node --input-type=module --check < frontend/live.js
+      - run: node --check frontend/live-capture-worklet.js
+      - run: node --test tests/live_audio.test.mjs
+      - run: bash -n scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch

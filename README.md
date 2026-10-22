@@ -2,7 +2,9 @@
 
 A small rehearsal space for creating a character and talking to it using **Qwen3-Omni-30B-A3B-Instruct**. Edit the character on the left, then type or record a question on the right. Anna, an underappreciated washing machine in a wealthy household, is the included fictional example.
 
-**Status: starter prototype.** The application has CPU checks and a browser preview. GPU inference, spoken quality and H200 memory use still need validation on Surrey. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
+**Live voice experiment added:** [Follow the live setup guide](docs/LIVE_SETUP.md) for continuous microphone input, automatic pause detection, interruption and streamed Drama 3 speech. That mode uses English Faster-Whisper + a small Qwen3-4B text model + Drama 3, separately from the original Qwen-Omni 30B baseline described below. [View the live UI preview](docs/screenshots/live-preview.jpg).
+
+**Status: starter prototype.** CPU transport tests and browser checks pass. Actual GPU inference, combined H200 memory use, spoken quality and live response time still need validation on Surrey. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
 
 ![Character sheet and conversation preview](docs/screenshots/studio-preview.jpg)
 
@@ -14,7 +16,7 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 - View the exact character instructions; download the character as JSON.
 - Local browser saving for the character; recent conversation context in server RAM.
 
-This first version uses **one recorded turn, then one reply**. It does not implement simultaneous speech, streaming audio, voice cloning, model training or the full existing Character Studio feature set.
+The original baseline uses **one recorded turn, then one reply**. The new `--live` mode streams phrase audio and supports interruption; it is a cascaded voice pipeline, not a native full-duplex model. Neither mode implements model training or the full existing Character Studio feature set.
 
 The initial GPU trial has been reported as too slow for a live conversation. See [the voice behaviour and streaming runtime notes](docs/LIVE_VOICE.md) for the confirmed bottlenecks and the distinction between this baseline and a live call.
 
@@ -48,6 +50,9 @@ Follow **[the Surrey guide](docs/SURREY.md)**. The starting target is one alloca
 | `studio/engine.py` | Qwen loading, generation and recent conversation context |
 | `studio/audio.py` | WAV validation, resampling and reply encoding |
 | `characters/anna.json` | Example character |
+| `live_voice/` | Continuous-mic app, turn detection, local providers and interruption |
+| `frontend/live.*`, `frontend/live-audio.mjs` | Live call page, controls and streamed PCM playback |
+| `scripts/run_live_stack.sh` | Start the live app and both model servers |
 | `scripts/` | Environment setup, model download and launch |
 | `slurm/` | Optional batch job for Surrey |
 
@@ -61,13 +66,15 @@ Read [architecture](docs/ARCHITECTURE.md) for the request flow and [handoff note
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
-.venv/bin/python -m compileall -q studio scripts tests
+.venv/bin/python -m compileall -q studio live_voice scripts experiments/drama3 tests
 node --check frontend/app.js
 node --check frontend/recorder-worklet.js
-bash -n scripts/setup.sh scripts/run.sh slurm/qwen-studio.sbatch
+node --input-type=module --check < frontend/live.js
+node --test tests/live_audio.test.mjs
+bash -n scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch
 ```
 
-The tests exercise the app contract and use an explicit test double for inference. They do not demonstrate Qwen's quality.
+46 Python tests and six JavaScript audio tests exercise app contracts, turn detection, streamed provider responses, interruption and playback acknowledgements. They use explicit test doubles for inference and do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

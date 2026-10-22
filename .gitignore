@@ -1,5 +1,6 @@
 .venv/
 .venv-drama3/
+.venv-live/
 __pycache__/
 *.py[cod]
 .env
