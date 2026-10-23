@@ -2,7 +2,7 @@
 
 This experimental mode connects **English speech recognition → Qwen3-4B-Instruct-2507 → Drama 3**. Start a call once, speak, pause, and hear streamed phrases. The microphone waits while the character generates and plays a reply. Use **Stop reply** to take over. The original Qwen3-Omni 30B recorded-turn mode remains available separately.
 
-**Status, 23 October 2026:** all three real Surrey services started and `/api/status` reported them ready. The first speaker-based microphone test repeatedly cancelled replies, exposing an overly eager VAD interruption path. The new protected turn-taking, voice reference, delivery and emotional-trigger controls have CPU tests and a browser preview; microphone behaviour and expressive delivery still need a listening test after deploying this update. Combined VRAM has not been measured. This is not native full-duplex speech generation. Recognition finalises each utterance after a pause.
+**Status, 23 October 2026:** all three real Surrey services started and `/api/status` reported them ready. The first speaker-based microphone test repeatedly cancelled replies, exposing an overly eager VAD interruption path. The protected turn-taking and initial voice/trigger controls were deployed; the user reports literal-only trigger recognition and mostly flat vocal emotion. Contextual assessment and fuller performance direction now have CPU tests; their real-model accuracy, added latency and audible effect are not yet verified. Combined VRAM has not been measured. This is not native full-duplex speech generation. Recognition finalises each utterance after a pause.
 
 ## 1. Prepare on Surrey
 
@@ -81,7 +81,7 @@ Short text clauses go to Drama 3 before the full answer finishes. Raw audio chun
 
 ### Voice and emotion
 
-Open **How they speak**. The speaking-style text guides the dialogue. **Emotion** (Natural, Calm, Excited, Sad, Angry, Anxious or Whispering) and **Expression** (None, Sigh or Laugh) add inline Drama 3 delivery tags to TTS input. These two controls remain available during a call and apply to the next answer. Tags stay out of visible dialogue and conversation history. Events are inserted once per answer. Short single-word phrases receive no tag.
+Open **How they speak**. The speaking-style text guides the dialogue. **Emotion** (Natural, Calm, Excited, Sad, Angry, Anxious or Whispering) and **Expression** (None, Sigh or Laugh) add inline Drama 3 delivery tags to TTS input. These two controls remain available during a call and apply to the next answer. Tags stay out of visible dialogue and conversation history. Events are inserted once per answer. Add a **Vocal direction**, or leave it blank to use a descriptive emotion preset. Emotional replies retain complete sentences up to a 200-character chunk target, rather than splitting at every comma; natural replies keep the earlier short chunks. This trades some first-audio delay for more performance context. Short single-word phrases receive no tag.
 
 To select a different voice, choose a **2–15 second uncompressed PCM16 WAV**, mono or stereo at 8–48 kHz, no larger than 2 MB, and enter its exact spoken words. The browser previews the selected clip, then sends it in the bounded start message. Drama 3 receives it as `ref_audio` plus `ref_text`. It is kept in RAM for the call, not written into the character profile or automatically saved to browser storage. Reselect it after reloading. End the call before changing a reference.
 
@@ -91,11 +91,23 @@ This is voice conditioning, not a named preset-voice catalogue. Emotional tags a
 
 Open **Emotional trigger**. Anna starts with an editable example: **Press reset → Anxious → fear of losing her memories; ask the visitor to stop**. Configure the stage action, feeling and changed behaviour before the call. During the call, **Press reset** fires it immediately and produces a reaction; this intentional stage action may interrupt the current answer. **Clear reaction** resolves the state for subsequent answers. Core identity and biography remain intact.
 
-The default exact spoken cue is **“I pressed your reset button”**. Once recognised, it activates the same state before dialogue and audio generation. Questions such as “What does your reset button do?” do not activate it. This is explicit cue matching, not general intent recognition. The action button is a rehearsal control; no physical reset-button hardware is connected yet.
+The **Example wording** is an illustration, not a string to match. After speech recognition, the same local Qwen model makes a separate JSON decision from character facts, the configured trigger and recent conversation: **activate**, **release** or **hold**. It is prompted to interpret paraphrases, pronouns, threatened or completed actions, negation, hypothetical discussion and reassurance. For example, “My finger is already on it” can activate anxiety when earlier dialogue established that “it” is the memory-reset button. A question about how reset works alone should hold the normal state; backing away and withdrawing the threat can release anxiety. These are intended behaviours, not measured accuracy guarantees. The action button remains a direct rehearsal control; no physical hardware is connected yet.
 
-The active state persists across replies, adds the behavioural direction to the current scene prompt and overrides vocal emotion with `[anxious]` (or the selected trigger emotion). Clearing it restores the ordinary voice setting and tells the character the threat is resolved. The model still needs to be evaluated for how convincingly it performs that state.
+The decision is validated before use. Context-check failure leaves the current state unchanged and is shown in the interface; there is no hidden keyword or exact-match fallback. The context request uses deterministic JSON output, a four-second HTTP timeout and a 4.5-second outer bound. Its measured time appears separately from dialogue generation. The additional model request is sequential on the existing one-sequence text server, so it adds latency without loading another model.
+
+**How should it sound?** sets a vocal-performance description for the trigger, separate from behavioural direction. Drama 3 receives both the emotion label and performance descriptor, inserted after the opening words. A neutral reference may also influence delivery; fuller cues do not guarantee convincing acted emotion. An appropriately performed reference clip can be tested through the existing voice-reference upload.
+
+The active state persists across replies, adds the behavioural direction to the current scene prompt and overrides vocal emotion with `[anxious]` (or the selected trigger emotion). Contextual resolution or the Clear reaction button restores the ordinary voice setting and tells the character the threat is resolved. Threats are described as threats, rather than falsely treated as actions that have already happened. The model still needs to be evaluated for how convincingly it performs that state.
 
 ## 6. Measure rather than guess
+
+For a real-model contextual check, run in the GPU checkout after pulling the updated code (the existing model services can stay running):
+
+```bash
+.venv-live/bin/python scripts/evaluate_emotion.py
+```
+
+Add `--speech` to generate a listening comparison: the same words and synthetic voice reference with natural delivery, the previous short emotion tag and fuller performance direction. Results are written on the machine running the script under ignored `outputs/emotion-evaluation/`: `context-results.json`, three WAV files and `listen.html`. The 12 fictional test cases are a small diagnostic set, not a general intelligence benchmark. Audio duration and request timing do not establish emotional quality. End the live call before running these tests. No model service is restarted by the script.
 
 The page shows recognition, first text token and first TTS chunk timing. **Server to first audio** starts near the detected end of speech and ends when the server receives its first PCM chunk. It excludes SSH/network delivery and browser output buffering; it does not measure first audio heard. Typed tests omit the speech/pause path. Compare several warmed turns as well as first synthesis.
 

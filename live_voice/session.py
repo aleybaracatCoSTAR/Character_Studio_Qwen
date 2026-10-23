@@ -27,17 +27,20 @@ class LiveSession:
         self.trigger = trigger
         self.trigger_active = False
         self.trigger_cleared = False
+        self.trigger_evidence = ""
 
-    async def trigger_state(self, active):
+    async def trigger_state(self, active, evidence="", source="director"):
         if self.trigger_active and not active: self.trigger_cleared = True
         if active: self.trigger_cleared = False
         self.trigger_active = bool(active and self.trigger)
+        self.trigger_evidence = evidence if active else ""
         await self.send_json({"type":"trigger_state", "active":self.trigger_active,
-                              "emotion":self.trigger.emotion if self.trigger_active else self.voice.emotion})
+                              "emotion":self.trigger.emotion if self.trigger_active else self.voice.emotion,
+                              "evidence":evidence,"source":source})
 
     async def fire_trigger(self):
         if not self.trigger: return
-        await self.trigger_state(True)
+        await self.trigger_state(True, self.trigger.condition)
         await self.begin(text=f"[Stage action: {self.trigger.condition}]", action=True)
 
     async def interrupt(self):
@@ -83,21 +86,40 @@ class LiveSession:
             if not text or not text.strip():
                 self.reply_pending = False
                 await self.send_json({"type":"empty_transcript", "turn_id":turn_id}); return
-            if self.trigger and not action and self.trigger.matches(text):
-                await self.trigger_state(True)
+            await self.send_json({"type":"transcript", "turn_id":turn_id, "text":text, "source":"action" if action else "speech"})
+            if self.trigger and not action:
+                check_started = time.perf_counter()
+                try:
+                    decision = await asyncio.wait_for(
+                        self.providers.assess_trigger(self.character,self.trigger,self.history.messages,text,self.trigger_active),4.5)
+                    metrics["context_check_ms"] = round((time.perf_counter()-check_started)*1000)
+                    if decision.action == "activate":
+                        await self.trigger_state(True, decision.evidence, source="context")
+                    elif decision.action == "release" and self.trigger_active:
+                        await self.trigger_state(False, decision.evidence, source="context")
+                    await self.send_json({"type":"trigger_check","ok":True,"action":decision.action,
+                                          "evidence":decision.evidence,"ms":metrics["context_check_ms"]})
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    metrics["context_check_ms"] = round((time.perf_counter()-check_started)*1000)
+                    logger.warning("Emotional context check unavailable (%s).",type(exc).__name__)
+                    await self.send_json({"type":"trigger_check","ok":False,
+                                          "message":"Context check unavailable. Current emotion is unchanged; the test action still works."})
             # Snapshot state per answer; live controls affect the next reply.
             active = self.trigger if self.trigger_active else None
-            delivery = Delivery(emotion=active.emotion if active else self.voice.emotion, event=self.voice.event)
+            delivery = Delivery(emotion=active.emotion if active else self.voice.emotion, event=self.voice.event,
+                                direction=active.delivery if active else self.voice.direction)
             target = self.character
             if active:
-                target = self.character.model_copy(update={"beat":self.character.beat + "\n\n" + active.state_note()})
+                target = self.character.model_copy(update={"beat":self.character.beat + "\n\n" + active.state_note(self.trigger_evidence)})
             elif self.trigger_cleared:
                 target = self.character.model_copy(update={"beat":self.character.beat +
                     "\n\nThe earlier trigger has been resolved by the director. Return to your normal emotional state and behaviour. You can remember what happened, but it is no longer an ongoing threat."})
             self.history.begin(turn_id, text)
-            await self.send_json({"type":"transcript", "turn_id":turn_id, "text":text, "source":"action" if action else "speech"})
             queue = asyncio.Queue(maxsize=2)
-            chunker = PhraseChunker()
+            expressive = delivery.emotion != "neutral" or bool(delivery.direction.strip())
+            chunker = PhraseChunker(target_chars=200 if expressive else 85, sentence_only=expressive)
             answer = []
             llm_started = time.perf_counter()
 

@@ -10,12 +10,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 MAX_REFERENCE_BYTES = 2 * 1024 * 1024
 MAX_START_BYTES = 3 * 1024 * 1024
 Emotion = Literal["neutral", "calm", "excited", "sad", "angry", "anxious", "whisper"]
+EMOTION_DIRECTIONS = {
+    "anxious":"frightened, shaky voice, urgent pleading, quick uneven breaths",
+    "angry":"tense, forceful and sharply emphatic delivery",
+    "sad":"subdued, fragile voice with hesitant pauses",
+    "excited":"bright, energetic voice with animated pitch and lively pace",
+    "calm":"gentle, unhurried, reassuring delivery",
+    "whisper":"quiet intimate whisper",
+}
 
 
 class Delivery(BaseModel):
     model_config = ConfigDict(extra="forbid")
     emotion: Emotion = "neutral"
     event: Literal["none", "sigh", "laugh"] = "none"
+    direction: str = Field(default="", max_length=200)
 
 
 class VoiceSettings(Delivery):
@@ -50,9 +59,14 @@ class VoiceSettings(Delivery):
 def spoken_input(text, delivery, first_phrase=False):
     """Keep tags out of visible dialogue; insert after opening words to avoid leading-tag stalls."""
     tags = [] if delivery.emotion == "neutral" else [delivery.emotion]
+    direction = delivery.direction.strip() or EMOTION_DIRECTIONS.get(delivery.emotion, "")
+    if direction:
+        # A performance cue is plain text inside one tag, never an injected speaker/control token.
+        direction = direction.translate(str.maketrans('', '', '[]<>')).strip()
+        if direction: tags.append(direction)
     if first_phrase and delivery.event != "none":
         tags.append({"sigh":"sighs", "laugh":"laughs"}[delivery.event])
     words = text.split()
     if not tags or len(words) < 2: return text
-    position = min(3, len(words) - 1)
+    position = min(2, len(words) - 1)
     return " ".join(words[:position] + [f"[{tag}]" for tag in tags] + words[position:])

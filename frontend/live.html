@@ -11,6 +11,7 @@
 <label>Speaking style<textarea name="voice_style" rows="3" maxlength="500"></textarea></label>
 <div class="voice-controls"><label>Emotion<select id="voice-emotion" data-live-setting="true"><option value="neutral">Natural</option><option value="calm">Calm</option><option value="excited">Excited</option><option value="sad">Sad</option><option value="angry">Angry</option><option value="anxious">Anxious</option><option value="whisper">Whispering</option></select></label>
 <label>Expression<select id="voice-event" data-live-setting="true"><option value="none">None</option><option value="sigh">Sigh</option><option value="laugh">Laugh</option></select></label></div>
+<label>Vocal direction<textarea id="voice-direction" data-live-setting="true" maxlength="200" rows="2" placeholder="E.g. a shaky voice, urgent and breathless…"></textarea></label>
 <p class="hint small" id="delivery-note">Change emotion during a call; it applies to the next reply. Drama 3 interprets delivery cues, so results can vary.</p>
 <label>Choose a different voice<input id="voice-reference" type="file" accept=".wav,audio/wav,audio/x-wav"></label>
 <p class="hint small">Optional: a 2–15 second PCM16 WAV, up to 2 MB. Without a clip, the first generated phrase sets this call's voice.</p>
@@ -25,8 +26,9 @@
 <label>What happens?<input id="trigger-condition" maxlength="200" value="Someone presses Anna's reset button."></label>
 <label>How do they feel?<select id="trigger-emotion"><option value="anxious">Anxious</option><option value="calm">Calm</option><option value="excited">Excited</option><option value="sad">Sad</option><option value="angry">Angry</option><option value="whisper">Whispering</option><option value="neutral">Natural</option></select></label>
 <label>How does their behaviour change?<textarea id="trigger-behaviour" maxlength="600" rows="4">Your polite small talk gives way to anxiety. You fear a reset will erase your memories, especially the housekeeper's kindness. Ask them to stop and explain why those memories matter. Speak in short, urgent sentences. Stay a washing machine; do not invent a human body.</textarea></label>
-<label>Spoken cue (exact phrase)<input id="trigger-cue" maxlength="160" value="I pressed your reset button"></label>
-<p class="hint small">The test action or exact spoken cue activates the reaction. A mention or question about reset does not. Clear the reaction to return to the normal state.</p>
+<label>How should it sound?<textarea id="trigger-delivery" maxlength="200" rows="2">Frightened, shaky voice with quick uneven breaths and urgent pleading. Make the change from ordinary small talk clearly audible.</textarea></label>
+<label>Example wording (optional)<input id="trigger-cue" maxlength="160" value="I pressed your reset button"></label>
+<p class="hint small">The model reads the recent conversation for actions, threats, indirect references and reassurance. Wording does not have to match the example. You can still use the test action directly.</p>
 <div class="trigger-actions"><button type="button" id="test-trigger" class="secondary" data-live-setting="true" disabled>Press reset</button><button type="button" id="clear-trigger" class="quiet" data-live-setting="true" disabled>Clear reaction</button></div>
 <p id="trigger-state" class="hint small" role="status">Start a call to test the reaction.</p>
 </div></details>

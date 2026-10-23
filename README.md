@@ -4,7 +4,7 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 
 **Live voice experiment added:** [Follow the live setup guide](docs/LIVE_SETUP.md) for continuous microphone input, automatic pause detection, interruption and streamed Drama 3 speech. That mode uses English Faster-Whisper + a small Qwen3-4B text model + Drama 3, separately from the original Qwen-Omni 30B baseline described below. [View the live UI preview](docs/screenshots/live-preview.jpg).
 
-The live sidebar includes a WAV voice reference, vocal emotion and expression, and an editable emotional trigger. Anna's example is **Press reset → Anxious → fear of losing memories**. The microphone waits during replies; use **Stop reply** to take over. [Preview the trigger editor](docs/screenshots/emotional-trigger-preview.jpg). Delivery quality still needs a listening test after deploying this update.
+The live sidebar includes a WAV voice reference, vocal emotion and expression, and an editable emotional trigger. Anna's example is **Press reset → Anxious → fear of losing memories**. The microphone waits during replies; use **Stop reply** to take over. [Preview the trigger editor](docs/screenshots/contextual-reaction-preview.jpg). Triggers now use a local-model contextual decision rather than exact wording. Vocal direction and complete sentence chunks provide stronger performance cues; actual contextual accuracy and delivery quality still need the [real-model evaluation](docs/LIVE_SETUP.md#6-measure-rather-than-guess).
 
 **Status: starter prototype.** CPU transport tests and browser checks pass. A short standalone Drama 3 synthesis succeeded on Surrey through the Mac SSH tunnel on 23 October 2026; [details](experiments/drama3/README.md#validation). The full live stack, combined H200 memory use, spoken quality and live response time still need validation. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
 
@@ -76,7 +76,7 @@ node --test tests/live_audio.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-62 Python tests and eight JavaScript audio tests exercise app contracts, protected turn-taking, streamed provider responses, cancellation, playback acknowledgements, bounded voice references, delivery tags, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
+67 Python tests and eight JavaScript audio tests exercise app contracts, protected turn-taking, streamed provider responses, cancellation, playback acknowledgements, bounded voice references, delivery tags, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

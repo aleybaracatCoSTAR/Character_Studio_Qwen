@@ -8,14 +8,14 @@ let triggerActive=false;
 let sessionReady=false;
 function triggerSettings(){return $('trigger-enabled').checked?{
   action:$('trigger-action').value,condition:$('trigger-condition').value,emotion:$('trigger-emotion').value,
-  behaviour:$('trigger-behaviour').value,spoken_cue:$('trigger-cue').value
+  behaviour:$('trigger-behaviour').value,spoken_cue:$('trigger-cue').value,delivery:$('trigger-delivery').value
 }:null;}
 const replies=new Map();
 function character(){return Object.fromEntries(fields.map(key=>[key,form.elements[key].value]));}
 function feedback(message=''){$('feedback').textContent=message;}
 function state(message){$('call-state').textContent=message;}
 function send(value){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(value));}
-function delivery(){return {emotion:$('voice-emotion').value,event:$('voice-event').value};}
+function delivery(){return {emotion:$('voice-emotion').value,event:$('voice-event').value,direction:$('voice-direction').value};}
 async function voiceSettings(){
   const settings=delivery(),file=$('voice-reference').files[0];
   if(!file)return settings;
@@ -69,7 +69,12 @@ async function disconnect(){
 }
 function event(data){
   if(data.type==='trigger_state'){
-    triggerActive=data.active;$('trigger-state').textContent=data.active?`Reaction active · ${data.emotion}`:'Normal state restored for the next reply';controls();return;
+    triggerActive=data.active;$('trigger-state').textContent=(data.active?`Reaction active · ${data.emotion}`:'Normal state restored')+(data.evidence?` · ${data.evidence}`:'');controls();return;
+  }
+  if(data.type==='trigger_check'){
+    if(!data.ok)$('trigger-state').textContent=data.message;
+    else if(data.action==='hold')$('trigger-state').textContent=(triggerActive?'Reaction continues':'Normal state')+(data.evidence?` · ${data.evidence}`:'');
+    state('Thinking… · Mic paused');return;
   }
   if(data.type==='ready'){sessionReady=true;state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
@@ -82,14 +87,14 @@ function event(data){
   if(data.type==='error'){feedback(data.message);if(playback)playback.clear();resumeMicrophone();return;}
   if(data.type==='empty_transcript'){feedback('I did not catch that. Try again.');resumeMicrophone();return;}
   if(data.turn_id!==currentTurn)return;
-  if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.text,'user');state('Thinking… · Mic paused');}
+  if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.text,'user');state($('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
   if(data.type==='text_delta'){
     if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
     replies.get(currentTurn).content.textContent+=data.text;$('messages').scrollTop=$('messages').scrollHeight;
   }
   if(data.type==='phrase_done')playback.phraseDone(data.seq);
   if(data.type==='response_done')playback.responseDone();
-  if(data.type==='metrics')$('timing').textContent=`Server to first audio: ${data.speech_end_to_first_audio_ms} ms · Recognition: ${data.stt_ms} ms · First text token: ${data.llm_first_token_ms} ms · Voice first chunk: ${data.tts_first_chunk_ms} ms`;
+  if(data.type==='metrics')$('timing').textContent=`Server to first audio: ${data.speech_end_to_first_audio_ms} ms · Recognition: ${data.stt_ms} ms · Context: ${data.context_check_ms||0} ms · First text token: ${data.llm_first_token_ms} ms · Voice first chunk: ${data.tts_first_chunk_ms} ms`;
 }
 async function connect(useMic=true){
   if(connecting)return;if(socket){await disconnect();return;}if(!form.reportValidity())return;
@@ -130,7 +135,7 @@ $('interrupt').addEventListener('click',()=>{playback?.clear();send({type:'inter
 $('typed-form').addEventListener('submit',e=>{e.preventDefault();const text=$('typed-message').value.trim();if(text){holdMicrophone();send({type:'text',text});$('typed-message').value='';feedback();}});
 $('toggle-profile').addEventListener('click',()=>{form.hidden=!form.hidden;$('toggle-profile').setAttribute('aria-expanded',String(!form.hidden));$('toggle-profile').textContent=form.hidden?'Show details':'Hide details';});
 form.addEventListener('input',()=>{const name=form.elements.name.value.trim()||'your character';$('chat-title').textContent=`Talk to ${name}`;try{localStorage.setItem('live-character-v1',JSON.stringify(character()));}catch(error){}});
-for(const id of ['voice-emotion','voice-event'])$(id).addEventListener('change',()=>{
+for(const id of ['voice-emotion','voice-event','voice-direction'])$(id).addEventListener('change',()=>{
   const settings=delivery();send({type:'delivery',settings});
   $('delivery-note').textContent=socket?'Delivery updated for the next reply.':'Delivery set for your next call.';
   try{localStorage.setItem('live-delivery-v1',JSON.stringify(settings));}catch(error){}
@@ -146,7 +151,7 @@ $('clear-reference').addEventListener('click',()=>{
   $('voice-reference').value='';$('reference-text').value='';$('reference-audio').removeAttribute('src');
   if(referenceURL)URL.revokeObjectURL(referenceURL);referenceURL=null;$('reference-preview').hidden=true;
 });
-for(const id of ['trigger-enabled','trigger-action','trigger-condition','trigger-emotion','trigger-behaviour','trigger-cue'])$(id).addEventListener('input',()=>{
+for(const id of ['trigger-enabled','trigger-action','trigger-condition','trigger-emotion','trigger-behaviour','trigger-cue','trigger-delivery'])$(id).addEventListener('input',()=>{
   $('trigger-fields').hidden=!$('trigger-enabled').checked;$('test-trigger').textContent=$('trigger-action').value||'Test reaction';controls();
   try{localStorage.setItem('live-trigger-v1',JSON.stringify(triggerSettings()));}catch(error){}
 });
@@ -170,11 +175,12 @@ async function init(){
     for(const [key,id] of [['emotion','voice-emotion'],['event','voice-event']]){
       if([...$(id).options].some(option=>option.value===saved?.[key]))$(id).value=saved[key];
     }
+    if(typeof saved?.direction==='string')$('voice-direction').value=saved.direction;
   }catch(error){}
   let trigger,storedTrigger=null;
   try{storedTrigger=localStorage.getItem('live-trigger-v1');trigger=JSON.parse(storedTrigger);}catch(error){}
   $('trigger-enabled').checked=storedTrigger===null?initial.name.toLowerCase()==='anna':!!trigger;
-  if(trigger)for(const [key,id] of [['action','trigger-action'],['condition','trigger-condition'],['emotion','trigger-emotion'],['behaviour','trigger-behaviour'],['spoken_cue','trigger-cue']]){
+  if(trigger)for(const [key,id] of [['action','trigger-action'],['condition','trigger-condition'],['emotion','trigger-emotion'],['behaviour','trigger-behaviour'],['spoken_cue','trigger-cue'],['delivery','trigger-delivery']]){
     if(typeof trigger[key]==='string')$(id).value=trigger[key];
   }
   $('trigger-fields').hidden=!$('trigger-enabled').checked;$('test-trigger').textContent=$('trigger-action').value||'Test reaction';

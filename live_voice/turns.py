@@ -52,9 +52,10 @@ class TurnDetector:
 
 class PhraseChunker:
     """Emit complete clauses early; bound the first phrase and avoid splitting words or decimals."""
-    def __init__(self, target_chars=85):
+    def __init__(self, target_chars=85, sentence_only=False):
         self.buffer = ""
         self.target_chars = target_chars
+        self.sentence_only = sentence_only
 
     def feed(self, delta, final=False):
         self.buffer += delta
@@ -62,6 +63,7 @@ class PhraseChunker:
         while self.buffer.strip():
             boundary = None
             for match in re.finditer(r'[.!?;:,](?:["”’])?(?=\s|$)', self.buffer):
+                if self.sentence_only and match.group()[0] not in '.!?': continue
                 prefix = self.buffer[:match.end()]
                 if len(prefix.split()) < 5:
                     continue

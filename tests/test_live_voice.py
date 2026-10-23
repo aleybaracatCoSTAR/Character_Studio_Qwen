@@ -15,7 +15,7 @@ from live_voice.providers import LocalProviders
 from live_voice.session import LiveSession
 from live_voice.turns import FRAME_BYTES, PhraseChunker, ReplyHistory, TurnDetector
 from live_voice.voice import Delivery, VoiceSettings, spoken_input
-from live_voice.reactions import EmotionalTrigger
+from live_voice.reactions import EmotionalTrigger, TriggerDecision, assessment_messages
 from studio.characters import example
 
 
@@ -53,13 +53,14 @@ class VoiceControlTests(unittest.TestCase):
         self.assertEqual(spoken_input('Hello there.',Delivery()),'Hello there.')
         self.assertEqual(spoken_input('Hello.',delivery),'Hello.')
 
-    def test_trigger_requires_an_explicit_action_cue(self):
+    def test_context_check_receives_facts_history_and_unmodified_latest_message(self):
         trigger=EmotionalTrigger()
-        self.assertTrue(trigger.matches('I pressed your reset button.'))
-        self.assertTrue(trigger.matches('I PRESSED YOUR RESET BUTTON'))
-        for text in ('What does your reset button do?', 'I did not press your reset button.',
-                     'If I pressed your reset button, what would happen?', 'I pressed your reset button?'):
-            self.assertFalse(trigger.matches(text))
+        history=[{'role':'assistant','content':'That red button clears my memories.'}]
+        system,situation=assessment_messages(example(),trigger,history,'My finger is already on it.',False)
+        self.assertEqual(situation['latest_participant_message'],'My finger is already on it.')
+        self.assertEqual(situation['recent_conversation'],history)
+        self.assertIn('housekeeper',situation['character']['memories'])
+        self.assertIn('negation',system);self.assertIn('pronouns',system)
 
 
 class TurnTests(unittest.TestCase):
@@ -92,6 +93,13 @@ class TurnTests(unittest.TestCase):
         self.assertEqual(chunker.feed("I am Anna, the washing machine. "),["I am Anna, the washing machine."])
         self.assertEqual(chunker.feed("The housekeeper knows"),[])
         self.assertEqual(chunker.feed("",final=True),["The housekeeper knows"])
+
+    def test_expressive_phrases_retain_a_complete_sentence_across_commas(self):
+        chunker=PhraseChunker(target_chars=200,sentence_only=True)
+        opening='Please do not reset me, '
+        self.assertEqual(chunker.feed(opening),[])
+        self.assertEqual(chunker.feed('those memories are all I have.'),
+                         ['Please do not reset me, those memories are all I have.'])
 
     def test_phrase_length_is_bounded_without_splitting_words(self):
         chunker=PhraseChunker(target_chars=60)
@@ -129,8 +137,13 @@ class FakeProviders:
     def __init__(self):
         self.stt=FakeSTT();self.references=[];self.spoken=[];self.characters=[]
         self.closed=False;self.cancelled=False;self.finish=None
+        self.decision=TriggerDecision(action='hold',evidence='No relevant change.')
+        self.assessments=[]
     async def health(self): return {"stt":True,"llm":True,"tts":True}
     async def close(self): self.closed=True
+    async def assess_trigger(self,character,trigger,history,latest,active):
+        self.assessments.append({'history':[dict(x) for x in history],'latest':latest,'active':active})
+        return self.decision
     async def text(self,character,history):
         self.characters.append(character)
         try:
@@ -244,13 +257,36 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.providers.characters[-1].about,original['about'])
         self.assertNotIn('[anxious]',self.providers.spoken[-1])
 
-    async def test_recognised_spoken_cue_changes_state_before_generation(self):
+    async def test_context_decision_changes_state_before_dialogue_and_synthesis(self):
         self.session.trigger=EmotionalTrigger()
-        async def recognised(pcm): return 'I pressed your reset button.'
+        self.session.history.messages=[{'role':'assistant','content':'That red button clears my memories.'}]
+        self.providers.decision=TriggerDecision(action='activate',evidence='The visitor has a finger on the memory-reset button.')
+        async def recognised(pcm): return 'My finger is already on it.'
         self.providers.stt.transcribe=recognised
         await self.session.begin(pcm=b'\x00\x00'*160);await self.session.task
         self.assertTrue(self.session.trigger_active)
         self.assertIn('[anxious]',self.providers.spoken[0])
+        self.assertIn('finger',self.providers.characters[-1].beat)
+        self.assertNotIn('has actually occurred',self.providers.characters[-1].beat)
+        self.assertEqual(self.providers.assessments[0]['latest'],'My finger is already on it.')
+        self.assertIn('red button',self.providers.assessments[0]['history'][0]['content'])
+
+    async def test_contextual_reassurance_releases_active_state(self):
+        self.session.trigger=EmotionalTrigger();self.session.trigger_active=True
+        self.providers.decision=TriggerDecision(action='release',evidence='The visitor moved their hand away.')
+        await self.session.begin(text='Okay, I am stepping away. I will leave it alone.');await self.session.task
+        self.assertFalse(self.session.trigger_active)
+        self.assertIn('trigger has been resolved',self.providers.characters[-1].beat)
+        self.assertNotIn('[anxious]',self.providers.spoken[0])
+
+    async def test_unavailable_context_model_does_not_silently_use_literal_matching(self):
+        self.session.trigger=EmotionalTrigger()
+        async def unavailable(*args): raise RuntimeError('Synthetic context failure')
+        self.providers.assess_trigger=unavailable
+        await self.session.begin(text='I pressed your reset button');await self.session.task
+        self.assertFalse(self.session.trigger_active)
+        self.assertTrue(any(x['type']=='trigger_check' and not x['ok'] for x in self.events))
+        self.assertTrue(self.audio)
 
 
 class ByteStream(httpx.AsyncByteStream):
@@ -261,6 +297,32 @@ class ByteStream(httpx.AsyncByteStream):
 
 
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_context_model_uses_json_and_passes_evidence_back_for_validation(self):
+        requests=[]
+        def handle(request):
+            requests.append(json.loads(request.content))
+            return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps({'action':'activate','evidence':'The visitor threatens to wipe her memories.'})}}]})
+        providers=LocalProviders(FakeSTT(),transport=httpx.MockTransport(handle))
+        try:
+            decision=await providers.assess_trigger(example(),EmotionalTrigger(),[],
+                                                   'I can wipe everything you remember.',False)
+            self.assertEqual(decision.action,'activate')
+            self.assertEqual(requests[0]['response_format'],{'type':'json_object'})
+            self.assertFalse(requests[0]['stream'])
+            situation=json.loads(requests[0]['messages'][1]['content'])
+            self.assertEqual(situation['latest_participant_message'],'I can wipe everything you remember.')
+        finally: await providers.close()
+
+    async def test_invalid_context_output_is_not_treated_as_a_trigger(self):
+        for output in ('not json','{"action":"destroy","evidence":"x"}',
+                       '{"action":"activate","evidence":"x","unexpected":true}'):
+            providers=LocalProviders(FakeSTT(),transport=httpx.MockTransport(lambda request:
+                httpx.Response(200,json={'choices':[{'message':{'content':output}}]})))
+            try:
+                with self.assertRaises(ValueError):
+                    await providers.assess_trigger(example(),EmotionalTrigger(),[],'Hello',False)
+            finally: await providers.close()
+
     async def test_text_sse_and_pcm_chunks_follow_the_actual_contract(self):
         requests=[]; stream=ByteStream([b"\x01",b"\x02\x03",b"\x04"])
         def handle(request):

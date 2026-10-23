@@ -11,6 +11,7 @@ import httpx
 import numpy as np
 
 from studio.characters import system_prompt
+from .reactions import TriggerDecision, assessment_messages
 
 OUTPUT_RATE = 44100
 
@@ -89,6 +90,18 @@ class LocalProviders:
                 if choices:
                     text = choices[0].get("delta", {}).get("content")
                     if text: yield text
+
+    async def assess_trigger(self, character, trigger, history, latest, active):
+        system, situation = assessment_messages(character, trigger, history, latest, active)
+        payload = {"model":"live-character", "stream":False, "temperature":0, "max_tokens":110,
+                   "response_format":{"type":"json_object"},
+                   "messages":[{"role":"system","content":system},
+                               {"role":"user","content":json.dumps(situation,ensure_ascii=False)}]}
+        response = await self.http.post(self.llm_url + "/v1/chat/completions", json=payload, timeout=4)
+        response.raise_for_status()
+        body = response.json()
+        content = body["choices"][0]["message"]["content"]
+        return TriggerDecision.model_validate_json(content)
 
     async def audio(self, text, reference=None):
         payload = {"model":"fishaudio/drama-3", "input":text, "voice":"default", "stream":True,
