@@ -1,6 +1,7 @@
 """Drama 3 delivery tags and optional local WAV voice references."""
 import base64
 import binascii
+from pathlib import Path
 from io import BytesIO
 from typing import Literal
 import wave
@@ -10,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 MAX_REFERENCE_BYTES = 2 * 1024 * 1024
 MAX_START_BYTES = 3 * 1024 * 1024
 Emotion = Literal["neutral", "calm", "excited", "sad", "angry", "anxious", "whisper"]
+VOICE_DIRECTORY = Path(__file__).resolve().parent.parent / 'assets' / 'voices'
+REFERENCE_TEXT = 'When a man looks for something beyond his reach, his friends say he is looking for the pot of gold at the end of the rainbow.'
 EMOTION_DIRECTIONS = {
     "anxious":"frightened, shaky voice, urgent pleading, quick uneven breaths",
     "angry":"tense, forceful and sharply emphatic delivery",
@@ -28,12 +31,15 @@ class Delivery(BaseModel):
 
 
 class VoiceSettings(Delivery):
+    preset: Literal["automatic", "female", "male", "custom"] = "automatic"
     reference_audio: str = Field(default="", max_length=MAX_START_BYTES - 65536)
     reference_text: str = Field(default="", max_length=500)
 
     @model_validator(mode="after")
     def check_reference(self):
-        if not self.reference_audio and not self.reference_text.strip(): return self
+        if not self.reference_audio and not self.reference_text.strip():
+            if self.preset == "custom": raise ValueError("Upload a WAV and transcript for a custom voice.")
+            return self
         if not self.reference_audio.startswith("data:audio/wav;base64,") or not self.reference_text.strip():
             raise ValueError("Choose a WAV voice reference and enter its exact spoken words.")
         try:
@@ -53,6 +59,9 @@ class VoiceSettings(Delivery):
 
     def reference(self):
         if self.reference_audio: return self.reference_audio, self.reference_text.strip()
+        if self.preset in ("female", "male"):
+            audio = (VOICE_DIRECTORY / f"{self.preset}.wav").read_bytes()
+            return "data:audio/wav;base64," + base64.b64encode(audio).decode(), REFERENCE_TEXT
         return None
 
 

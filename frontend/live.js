@@ -1,24 +1,28 @@
 import {StreamResampler,pcm16,PCMPlayback} from './live-audio.mjs';
+import {Conversation} from './live-transcript.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 let socket=null,context=null,stream=null,capture=null,playback=null,connecting=false,muted=false,ready=false,currentTurn=0;
 let replyPending=false,resumeTimer=null;
 let referenceURL=null;
 let triggerActive=false;
-let sessionReady=false;
+let sessionReady=false,disconnecting=null;
+const conversation=new Conversation($('messages'),$('empty-state'));
+function directorSettings(){return {enabled:$('director-enabled').checked,notes:$('director-input').value};}
 function triggerSettings(){return $('trigger-enabled').checked?{
   action:$('trigger-action').value,condition:$('trigger-condition').value,emotion:$('trigger-emotion').value,
   behaviour:$('trigger-behaviour').value,spoken_cue:$('trigger-cue').value,delivery:$('trigger-delivery').value
 }:null;}
-const replies=new Map();
+const replies=conversation.replies;
 function character(){return Object.fromEntries(fields.map(key=>[key,form.elements[key].value]));}
 function feedback(message=''){$('feedback').textContent=message;}
 function state(message){$('call-state').textContent=message;}
 function send(value){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(value));}
 function delivery(){return {emotion:$('voice-emotion').value,event:$('voice-event').value,direction:$('voice-direction').value};}
 async function voiceSettings(){
-  const settings=delivery(),file=$('voice-reference').files[0];
-  if(!file)return settings;
+  const settings={...delivery(),preset:$('voice-preset').value},file=$('voice-reference').files[0];
+  if(settings.preset!=='custom')return settings;
+  if(!file)throw new Error('Upload a WAV reference, or choose Female, Male or Automatic.');
   if(file.size>2*1024*1024)throw new Error('Choose a voice reference smaller than 2 MB.');
   const transcript=$('reference-text').value.trim();
   if(!transcript)throw new Error('Enter the exact words spoken in the voice reference.');
@@ -49,25 +53,27 @@ function controls(){
   $('clear-trigger').disabled=!connected||!sessionReady||!triggerActive;
   document.querySelector('.live-badge').classList.toggle('active',!!connected);
 }
-function message(speaker,text,kind='assistant'){
-  $('empty-state').hidden=true;
-  const node=document.createElement('div');node.className=`message ${kind}`;
-  const label=document.createElement('span');label.className='speaker';label.textContent=speaker;
-  const content=document.createElement('div');content.textContent=text;node.append(label,content);$('messages').append(node);
-  $('messages').scrollTop=$('messages').scrollHeight;return {node,content};
-}
+function message(speaker,text,kind='assistant'){return conversation.message(speaker,text,kind);}
 async function disconnect(){
-  clearTimeout(resumeTimer);replyPending=false;sessionReady=false;
-  triggerActive=false;$('trigger-state').textContent='Start a call to test the reaction.';
-  const previous=socket;socket=null;connecting=false;
+  if(disconnecting)return disconnecting;
+  const previous=socket,oldContext=context,oldStream=stream,oldCapture=capture,oldPlayback=playback;
+  socket=null;context=null;stream=null;capture=null;playback=null;connecting=true;
+  clearTimeout(resumeTimer);replyPending=false;sessionReady=false;triggerActive=false;controls();
+  $('trigger-state').textContent='Start a call to test the reaction.';
   if(previous){if(previous.readyState===WebSocket.OPEN)previous.send(JSON.stringify({type:'stop'}));previous.close();}
-  if(stream)stream.getTracks().forEach(track=>track.stop());stream=null;
-  if(capture){try{capture.disconnect();}catch(error){}capture=null;}
-  if(playback)playback.clear();playback=null;
-  if(context){try{await context.close();}catch(error){}context=null;}
-  muted=false;$('mute').textContent='Mute mic';state('Call ended');controls();
+  oldStream?.getTracks().forEach(track=>track.stop());
+  if(oldCapture){oldCapture.port.onmessage=null;try{oldCapture.disconnect();}catch(error){}}
+  oldPlayback?.clear();
+  disconnecting=(async()=>{if(oldContext){try{await oldContext.close();}catch(error){}}})()
+    .finally(()=>{disconnecting=null;connecting=false;muted=false;$('mute').textContent='Mute mic';state('Call ended');controls();});
+  return disconnecting;
 }
 function event(data){
+  if(data.type==='director_note'){
+    if(data.turn_id!==currentTurn)return;
+    $('director-note').textContent=data.ok?`Intention: ${data.intention}\nVoice: ${data.emotion} · ${data.delivery}${data.evidence?'\nEvidence: '+data.evidence:''}`:data.message;
+    $('director-latest').hidden=false;state('Thinking… · Mic paused');return;
+  }
   if(data.type==='trigger_state'){
     triggerActive=data.active;$('trigger-state').textContent=(data.active?`Reaction active · ${data.emotion}`:'Normal state restored')+(data.evidence?` · ${data.evidence}`:'');controls();return;
   }
@@ -87,19 +93,20 @@ function event(data){
   if(data.type==='error'){feedback(data.message);if(playback)playback.clear();resumeMicrophone();return;}
   if(data.type==='empty_transcript'){feedback('I did not catch that. Try again.');resumeMicrophone();return;}
   if(data.turn_id!==currentTurn)return;
-  if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.text,'user');state($('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
+  if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.text,'user');state($('director-enabled').checked?'Directing the next reply… · Mic paused':$('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
   if(data.type==='text_delta'){
     if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
     replies.get(currentTurn).content.textContent+=data.text;$('messages').scrollTop=$('messages').scrollHeight;
   }
   if(data.type==='phrase_done')playback.phraseDone(data.seq);
   if(data.type==='response_done')playback.responseDone();
-  if(data.type==='metrics')$('timing').textContent=`Server to first audio: ${data.speech_end_to_first_audio_ms} ms · Recognition: ${data.stt_ms} ms · Context: ${data.context_check_ms||0} ms · First text token: ${data.llm_first_token_ms} ms · Voice first chunk: ${data.tts_first_chunk_ms} ms`;
+  if(data.type==='metrics')$('timing').textContent=`Server to first audio: ${data.speech_end_to_first_audio_ms} ms · Recognition: ${data.stt_ms} ms · Director: ${data.director_ms??data.context_check_ms??0} ms · First text token: ${data.llm_first_token_ms} ms · Voice first chunk: ${data.tts_first_chunk_ms} ms`;
 }
 async function connect(useMic=true){
   if(connecting)return;if(socket){await disconnect();return;}if(!form.reportValidity())return;
   connecting=true;feedback();controls();
   try{
+    conversation.reset();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}
@@ -110,16 +117,16 @@ async function connect(useMic=true){
     }
     const url=new URL('/api/live',location.href);url.protocol=location.protocol==='https:'?'wss:':'ws:';
     const opened=new WebSocket(url);socket=opened;opened.binaryType='arraybuffer';
-    opened.onmessage=received=>{try{if(typeof received.data==='string')event(JSON.parse(received.data));else playback?.push(received.data);}catch(error){feedback('Audio connection failed. End the call and reconnect.');}};
-    opened.onerror=()=>feedback('Cannot connect to the live server. Check its terminal and SSH tunnel.');
+    opened.onmessage=received=>{if(socket!==opened)return;try{if(typeof received.data==='string')event(JSON.parse(received.data));else playback?.push(received.data);}catch(error){feedback('Audio connection failed. End the call and reconnect.');}};
+    opened.onerror=()=>{if(socket===opened)feedback('Cannot connect to the live server. Check its terminal and SSH tunnel.');};
     opened.onclose=async()=>{if(socket===opened){feedback('Live connection closed. Check that all three services are ready.');await disconnect();}};
     await new Promise((resolve,reject)=>{opened.onopen=resolve;opened.addEventListener('error',reject,{once:true});opened.addEventListener('close',()=>reject(new Error('Connection closed')),{once:true});});
-    send({type:'start',character:character(),voice,trigger:triggerSettings()});
+    send({type:'start',character:character(),voice,trigger:triggerSettings(),director:directorSettings()});
     if(useMic){
       const source=context.createMediaStreamSource(stream),gain=context.createGain();gain.gain.value=0;
       capture=new AudioWorkletNode(context,'live-capture');const resampler=new StreamResampler(context.sampleRate);
       capture.port.onmessage=async chunk=>{
-        if(!sessionReady||muted||replyPending||socket?.readyState!==WebSocket.OPEN)return;
+        if(socket!==opened||!sessionReady||muted||replyPending||socket?.readyState!==WebSocket.OPEN)return;
         if(socket.bufferedAmount>262144){feedback('Connection is too slow for live audio. Reconnect after checking the tunnel.');await disconnect();return;}
         const samples=resampler.push(chunk.data);if(samples.length)socket.send(pcm16(samples));
       };
@@ -140,6 +147,17 @@ for(const id of ['voice-emotion','voice-event','voice-direction'])$(id).addEvent
   $('delivery-note').textContent=socket?'Delivery updated for the next reply.':'Delivery set for your next call.';
   try{localStorage.setItem('live-delivery-v1',JSON.stringify(settings));}catch(error){}
 });
+function updateVoicePreset(){
+  const preset=$('voice-preset').value;
+  $('custom-voice-fields').hidden=preset!=='custom';
+  $('preset-audio').hidden=!['female','male'].includes(preset);
+  $('preset-audio').pause();
+  if(['female','male'].includes(preset))$('preset-audio').src=`/api/voice/${preset}`;
+  else $('preset-audio').removeAttribute('src');
+}
+$('voice-preset').addEventListener('change',()=>{
+  updateVoicePreset();try{localStorage.setItem('live-voice-preset-v1',$('voice-preset').value);}catch(error){}
+});
 $('voice-reference').addEventListener('change',()=>{
   if(referenceURL)URL.revokeObjectURL(referenceURL);referenceURL=null;
   const file=$('voice-reference').files[0];
@@ -157,12 +175,17 @@ for(const id of ['trigger-enabled','trigger-action','trigger-condition','trigger
 });
 $('test-trigger').addEventListener('click',()=>{holdMicrophone();send({type:'trigger'});});
 $('clear-trigger').addEventListener('click',()=>send({type:'clear_trigger'}));
+for(const id of ['director-enabled','director-input'])$(id).addEventListener('change',()=>{
+  const settings=directorSettings();send({type:'director',settings});
+  try{localStorage.setItem('live-director-v1',JSON.stringify(settings));}catch(error){}
+});
 async function status(){
   try{
     const response=await fetch('/api/status'),data=await response.json();ready=data.ready;
     $('status').textContent=data.preview?'Design preview':ready?'Voice services ready':'Services starting…';$('status').className=ready?'ready':'';
     $('mode-note').textContent=data.preview?'Design preview. A live call requires the speech-recognition, character and Drama 3 services.':ready?'Speak and pause to hear a reply. Your mic waits until the answer finishes. Use Stop reply to take over.':data.stt_error||Object.entries(data.services).map(([name,ok])=>`${name.toUpperCase()}: ${ok?'ready':'not ready'}`).join(' · ');
     if(data.busy&&!socket){ready=false;$('mode-note').textContent='Another voice session is active. End that call before starting a new one.';}
+    if(data.director)$('director-model').textContent=data.director.shared_model?'Separate director call · shares the running Qwen model':`Director model: ${data.director.model}`;
     controls();
   }catch(error){ready=false;$('status').textContent='Server disconnected';controls();}
 }
@@ -177,6 +200,14 @@ async function init(){
     }
     if(typeof saved?.direction==='string')$('voice-direction').value=saved.direction;
   }catch(error){}
+  try{const saved=JSON.parse(localStorage.getItem('live-director-v1'));
+    if(typeof saved?.enabled==='boolean')$('director-enabled').checked=saved.enabled;
+    if(typeof saved?.notes==='string')$('director-input').value=saved.notes;
+  }catch(error){}
+  try{const preset=localStorage.getItem('live-voice-preset-v1');
+    if([...$('voice-preset').options].some(option=>option.value===preset))$('voice-preset').value=preset;
+  }catch(error){}
+  updateVoicePreset();
   let trigger,storedTrigger=null;
   try{storedTrigger=localStorage.getItem('live-trigger-v1');trigger=JSON.parse(storedTrigger);}catch(error){}
   $('trigger-enabled').checked=storedTrigger===null?initial.name.toLowerCase()==='anna':!!trigger;

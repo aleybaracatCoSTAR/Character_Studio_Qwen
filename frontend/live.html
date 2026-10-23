@@ -8,16 +8,19 @@
 <label>About them<textarea name="about" rows="4" maxlength="2400"></textarea></label><label>What do they want?<textarea name="goal" rows="2" maxlength="500"></textarea></label>
 <details><summary>World & memories</summary><label>Environment<textarea name="environment" rows="3" maxlength="700"></textarea></label><label>Memories<textarea name="memories" rows="3" maxlength="1200"></textarea></label><label>What must stay true?<textarea name="rules" rows="3" maxlength="1000"></textarea></label><label>Current story moment<textarea name="beat" rows="2" maxlength="500"></textarea></label></details>
 <details><summary>How they speak</summary>
+<label>Voice<select id="voice-preset"><option value="automatic">Automatic</option><option value="female">Female · British</option><option value="male">Male · British</option><option value="custom">Custom reference</option></select></label>
+<audio id="preset-audio" controls preload="metadata" hidden></audio>
+<p class="hint small">Female and Male use short <a href="https://doi.org/10.7488/ds/2645" target="_blank" rel="noopener">VCTK</a> reference recordings (CC BY 4.0). Preview the source voice above; generated performance may vary.</p>
 <label>Speaking style<textarea name="voice_style" rows="3" maxlength="500"></textarea></label>
 <div class="voice-controls"><label>Emotion<select id="voice-emotion" data-live-setting="true"><option value="neutral">Natural</option><option value="calm">Calm</option><option value="excited">Excited</option><option value="sad">Sad</option><option value="angry">Angry</option><option value="anxious">Anxious</option><option value="whisper">Whispering</option></select></label>
 <label>Expression<select id="voice-event" data-live-setting="true"><option value="none">None</option><option value="sigh">Sigh</option><option value="laugh">Laugh</option></select></label></div>
 <label>Vocal direction<textarea id="voice-direction" data-live-setting="true" maxlength="200" rows="2" placeholder="E.g. a shaky voice, urgent and breathless…"></textarea></label>
 <p class="hint small" id="delivery-note">Change emotion during a call; it applies to the next reply. Drama 3 interprets delivery cues, so results can vary.</p>
-<label>Choose a different voice<input id="voice-reference" type="file" accept=".wav,audio/wav,audio/x-wav"></label>
+<div id="custom-voice-fields" hidden><label>Upload a voice reference<input id="voice-reference" type="file" accept=".wav,audio/wav,audio/x-wav"></label>
 <p class="hint small">Optional: a 2–15 second PCM16 WAV, up to 2 MB. Without a clip, the first generated phrase sets this call's voice.</p>
 <div id="reference-preview" hidden><audio id="reference-audio" controls preload="metadata"></audio><button type="button" id="clear-reference" class="quiet">Remove reference</button></div>
 <label>Exact words spoken in the reference<textarea id="reference-text" rows="2" maxlength="500" placeholder="Enter the clip's transcript…"></textarea></label>
-<p class="hint small">Voice clips go only to your local Drama 3 server for the call. They are not saved in the character profile. Select the clip again after reloading.</p>
+<p class="hint small">Voice clips go only to your local Drama 3 server for the call. They are not saved in the character profile. Select the clip again after reloading.</p></div>
 </details>
 <details><summary>Emotional trigger</summary>
 <label class="trigger-toggle"><input type="checkbox" id="trigger-enabled"> Enable a reaction</label>
@@ -32,9 +35,16 @@
 <div class="trigger-actions"><button type="button" id="test-trigger" class="secondary" data-live-setting="true" disabled>Press reset</button><button type="button" id="clear-trigger" class="quiet" data-live-setting="true" disabled>Clear reaction</button></div>
 <p id="trigger-state" class="hint small" role="status">Start a call to test the reaction.</p>
 </div></details>
+<details><summary>Director</summary>
+<label class="trigger-toggle"><input type="checkbox" id="director-enabled" data-live-setting="true" checked> Guide each reply</label>
+<label>Direction for this scene<textarea id="director-input" data-live-setting="true" rows="3" maxlength="600" placeholder="E.g. accept their help, then invite them to make one small choice. Keep the humour dry."></textarea></label>
+<p class="hint small">The director reads the conversation, gives the actor an intention and directs Drama 3's delivery. Notes apply to the next reply.</p>
+<p id="director-model" class="hint small">Separate director call · shares the running Qwen model</p>
+</details>
 <input type="hidden" name="speaker" value="Chelsie"></form><p class="hint small">Character details stay in this browser. End the call to edit them.</p></aside>
 <section class="conversation" aria-label="Live character conversation"><div class="conversation-heading"><div><span class="eyebrow">VOICE REHEARSAL</span><h2 id="chat-title">Talk to Anna</h2></div><span class="live-badge">Live audio</span></div>
 <p class="notice" id="mode-note">Checking speech recognition, the character model and Drama 3…</p>
+<details id="director-latest" hidden><summary>Latest director note</summary><p id="director-note" class="hint small"></p></details>
 <div id="messages" role="log" aria-live="polite"><div id="empty-state"><div class="spark">✳</div><h3>A conversation, one turn at a time.</h3><p>Start the call and speak. Pause to hear a reply. Use Stop reply to take over.</p></div></div>
 <div class="call-controls"><p id="call-state" role="status">Ready when you are</p><div class="call-buttons">
 <button id="start-call" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span>Start call</span></button>
@@ -42,5 +52,5 @@
 <div id="feedback" role="alert"></div><div id="timing" class="hint small"></div>
 <form id="typed-form" class="composer" hidden><label class="sr-only" for="typed-message">Message your character</label><textarea id="typed-message" rows="1" maxlength="2000" placeholder="Type a message…"></textarea><button id="send-text" class="primary" type="submit">Send ↑</button></form>
 <p class="hint small center">Mic waits during replies · Replies play as they arrive · Headphones recommended</p>
-<p class="attribution">Built with Fish Audio · Speech recognition → character model → Drama 3 voice</p></div>
+<p class="attribution">Built with Fish Audio · Speech recognition → director → character actor → Drama 3 voice</p></div>
 </section></main></body></html>

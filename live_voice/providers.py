@@ -12,6 +12,7 @@ import numpy as np
 
 from studio.characters import system_prompt
 from .reactions import TriggerDecision, assessment_messages
+from .director import DirectorPlan, director_messages
 
 OUTPUT_RATE = 44100
 
@@ -61,10 +62,13 @@ class SpeechRecognition:
 
 
 class LocalProviders:
-    def __init__(self, stt, llm_url="http://127.0.0.1:18092", tts_url="http://127.0.0.1:18093", transport=None):
+    def __init__(self, stt, llm_url="http://127.0.0.1:18092", tts_url="http://127.0.0.1:18093", transport=None,
+                 director_url=None, director_model="live-character"):
         self.stt = stt
         self.llm_url = llm_url.rstrip("/")
         self.tts_url = tts_url.rstrip("/")
+        self.director_url = (director_url or self.llm_url).rstrip("/")
+        self.director_model = director_model
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(120, connect=3), transport=transport)
 
     async def health(self):
@@ -75,9 +79,9 @@ class LocalProviders:
         return {"stt":self.stt.model is not None, "llm":llm, "tts":tts}
 
     async def text(self, character, history):
-        prompt = system_prompt(character) + "\n\nFor this voice call, reply in at most two short sentences. Use plain spoken words. Do not include bracketed delivery tags, markdown or stage directions."
+        prompt = system_prompt(character) + "\n\nFor this voice call, reply in at most three short sentences. Use plain spoken words. Do not include bracketed delivery tags, markdown or stage directions."
         payload = {"model":"live-character", "messages":[{"role":"system", "content":prompt}] + history,
-                   "stream":True, "max_tokens":100, "temperature":0.65}
+                   "stream":True, "max_tokens":120, "temperature":0.7}
         async with self.http.stream("POST", self.llm_url + "/v1/chat/completions", json=payload) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -90,6 +94,16 @@ class LocalProviders:
                 if choices:
                     text = choices[0].get("delta", {}).get("content")
                     if text: yield text
+
+    async def direct(self, character, history, latest, settings, voice, trigger=None,
+                     active=False, previous=None, stage_action=False):
+        payload = {"model":self.director_model, "stream":False, "temperature":0.2, "max_tokens":300,
+                   "response_format":{"type":"json_object"},
+                   "messages":director_messages(character,history,latest,settings,voice,trigger,
+                                                active,previous,stage_action)}
+        response = await self.http.post(self.director_url + "/v1/chat/completions", json=payload, timeout=6)
+        response.raise_for_status()
+        return DirectorPlan.model_validate_json(response.json()["choices"][0]["message"]["content"])
 
     async def assess_trigger(self, character, trigger, history, latest, active):
         system, situation = assessment_messages(character, trigger, history, latest, active)

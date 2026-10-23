@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from live_voice.app import create_app
+from live_voice.director import DirectorSettings, DirectorPlan, director_messages
 from live_voice.providers import LocalProviders
 from live_voice.session import LiveSession
 from live_voice.turns import FRAME_BYTES, PhraseChunker, ReplyHistory, TurnDetector
@@ -144,6 +145,10 @@ class FakeProviders:
     async def assess_trigger(self,character,trigger,history,latest,active):
         self.assessments.append({'history':[dict(x) for x in history],'latest':latest,'active':active})
         return self.decision
+    async def direct(self,character,history,latest,settings,voice,trigger=None,active=False,previous=None,stage_action=False):
+        return DirectorPlan(intention='Answer the current question and invite a practical choice.',
+                            emotion=voice.emotion,delivery=voice.direction or 'Natural, conversational pace.',
+                            trigger_action=self.decision.action,evidence=self.decision.evidence)
     async def text(self,character,history):
         self.characters.append(character)
         try:
@@ -162,7 +167,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.providers=FakeProviders();self.events=[];self.audio=[];self.audio_seen=asyncio.Event()
         async def send_json(event): self.events.append(event)
         async def send_bytes(packet): self.audio.append(packet);self.audio_seen.set()
-        self.session=LiveSession(self.providers,example(),send_json,send_bytes)
+        self.session=LiveSession(self.providers,example(),send_json,send_bytes,director=DirectorSettings(enabled=False))
 
     async def asyncTearDown(self): await self.session.close()
 
@@ -471,6 +476,130 @@ class LiveAPITests(unittest.TestCase):
                 self.assertEqual(socket.receive_json()['type'],'ready')
                 socket.send_json({'type':'played','turn_id':1,'seq':[]})
                 self.assertEqual(socket.receive_json()['type'],'error')
+
+
+class DirectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_plan_reaches_actor_and_tts_without_entering_visible_or_heard_dialogue(self):
+        providers=FakeProviders();events=[]
+        plan=DirectorPlan(intention='Accept their reassurance and ask which wash cycle to try.',
+                          emotion='calm',delivery='Relieved, softer, with an unhurried pace.',event='sigh')
+        calls=[]
+        async def direct(*args): calls.append(args);return plan
+        providers.direct=direct
+        async def send_json(value): events.append(value)
+        async def send_bytes(value): pass
+        original=example()
+        session=LiveSession(providers,original,send_json,send_bytes,
+                            director=DirectorSettings(notes='Invite a practical choice.'))
+        try:
+            session.history.messages=[{'role':'user','content':'I will not reset you.'},
+                                      {'role':'assistant','content':'Thank you for stepping away.'}]
+            await session.begin(text='Let me help you.');await session.task
+            self.assertIn(plan.intention,providers.characters[-1].beat)
+            self.assertIn('[calm]',providers.spoken[0]);self.assertIn(plan.delivery,providers.spoken[0])
+            self.assertIn('[sighs]',providers.spoken[0]);self.assertNotIn('[sighs]',providers.spoken[-1])
+            self.assertEqual(original.beat,example().beat)
+            self.assertEqual(calls[0][3].notes,'Invite a practical choice.')
+            note=next(e for e in events if e['type']=='director_note')
+            self.assertTrue(note['ok'])
+            self.assertTrue(all(plan.intention not in e['text'] for e in events if e['type']=='text_delta'))
+            self.assertNotIn(plan.intention,str(session.history.messages))
+        finally: await session.close()
+
+    async def test_director_alone_handles_context_once_and_trigger_overrides_vocal_suggestion(self):
+        providers=FakeProviders();calls=[];events=[]
+        async def direct(*args):
+            calls.append(args)
+            return DirectorPlan(intention='Ask them to move their hand away.',emotion='calm',
+                                delivery='Calm.',trigger_action='activate',evidence='Finger on the reset button.')
+        async def wrong_path(*args): raise AssertionError('Must not run two planning requests.')
+        providers.direct=direct;providers.assess_trigger=wrong_path
+        async def send_json(value):events.append(value)
+        async def send_bytes(value):pass
+        session=LiveSession(providers,example(),send_json,send_bytes,trigger=EmotionalTrigger())
+        try:
+            await session.begin(text='My finger is on it.');await session.task
+            self.assertEqual(len(calls),1);self.assertTrue(session.trigger_active)
+            self.assertIn('[anxious]',providers.spoken[0])
+            self.assertIn('Frightened',providers.spoken[0])
+        finally:await session.close()
+
+    async def test_failed_director_continues_actor_and_preserves_active_state(self):
+        providers=FakeProviders();events=[]
+        async def unavailable(*args):raise RuntimeError('Unavailable')
+        providers.direct=unavailable
+        async def send_json(value):events.append(value)
+        async def send_bytes(value):pass
+        session=LiveSession(providers,example(),send_json,send_bytes,trigger=EmotionalTrigger())
+        session.trigger_active=True
+        try:
+            await session.begin(text='I am stepping away.');await session.task
+            self.assertTrue(session.trigger_active);self.assertTrue(providers.spoken)
+            self.assertFalse(next(e for e in events if e['type']=='director_note')['ok'])
+        finally:await session.close()
+
+    async def test_cancelling_director_does_not_later_emit_actor_or_audio(self):
+        providers=FakeProviders();entered=asyncio.Event();cancelled=asyncio.Event();events=[]
+        async def blocking(*args):
+            entered.set()
+            try:await asyncio.Event().wait()
+            finally:cancelled.set()
+        providers.direct=blocking
+        async def send_json(value):events.append(value)
+        async def send_bytes(value):self.fail('Unexpected audio')
+        session=LiveSession(providers,example(),send_json,send_bytes)
+        try:
+            await session.begin(text='Hello');await entered.wait();await session.interrupt()
+            self.assertTrue(cancelled.is_set());self.assertFalse(providers.characters)
+            self.assertFalse(any(e['type']=='director_note' for e in events))
+        finally:await session.close()
+
+    async def test_director_uses_selected_endpoint_model_and_validated_structured_output(self):
+        requests=[]
+        expected=DirectorPlan(intention='Invite a practical choice.',emotion='calm',delivery='Soft and unhurried.')
+        def handle(request):
+            requests.append(request)
+            return httpx.Response(200,json={'choices':[{'message':{'content':expected.model_dump_json()}}]})
+        providers=LocalProviders(FakeSTT(),director_url='http://director:18094',director_model='my-director',
+                                 transport=httpx.MockTransport(handle))
+        try:
+            result=await providers.direct(example(),[],'Hello',DirectorSettings(),VoiceSettings())
+            self.assertEqual(result,expected)
+            self.assertEqual(str(requests[0].url),'http://director:18094/v1/chat/completions')
+            payload=json.loads(requests[0].content)
+            self.assertEqual(payload['model'],'my-director');self.assertFalse(payload['stream'])
+            self.assertEqual(payload['response_format'],{'type':'json_object'})
+        finally:await providers.close()
+
+    async def test_invalid_director_output_is_rejected_before_actor_use(self):
+        for output in ('not json','{"intention":"x","emotion":"evil","delivery":"x"}',
+                       '{"intention":"x","emotion":"calm","delivery":"x","secret":true}'):
+            providers=LocalProviders(FakeSTT(),transport=httpx.MockTransport(lambda request:
+                httpx.Response(200,json={'choices':[{'message':{'content':output}}]})))
+            try:
+                with self.assertRaises(ValueError):
+                    await providers.direct(example(),[],'Hello',DirectorSettings(),VoiceSettings())
+            finally:await providers.close()
+
+
+class PresetVoiceTests(unittest.TestCase):
+    def test_male_female_references_are_distinct_valid_audio_and_custom_overrides(self):
+        female=VoiceSettings(preset='female').reference();male=VoiceSettings(preset='male').reference()
+        self.assertNotEqual(female[0],male[0]);self.assertEqual(female[1],male[1])
+        for ref in (female,male):
+            VoiceSettings(preset='custom',reference_audio=ref[0],reference_text=ref[1])
+        custom=VoiceSettings(preset='male',reference_audio=reference_wav(),reference_text='Hello')
+        self.assertEqual(custom.reference()[1],'Hello')
+        self.assertIsNone(VoiceSettings().reference())
+        with self.assertRaises(ValueError):VoiceSettings(preset='custom')
+        with self.assertRaises(ValueError):VoiceSettings(preset='../../secret')
+
+    def test_voice_preview_only_serves_bundled_presets(self):
+        with TestClient(create_app(preview=True,providers=FakeProviders())) as client:
+            for name in ('female','male'):
+                response=client.get('/api/voice/'+name)
+                self.assertEqual(response.status_code,200);self.assertTrue(response.content.startswith(b'RIFF'))
+            self.assertEqual(client.get('/api/voice/unknown').status_code,404)
 
 
 if __name__=='__main__': unittest.main()

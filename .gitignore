@@ -19,3 +19,5 @@ logs/
 *.pth
 *.npz
 .DS_Store
+
+!assets/voices/*.wav

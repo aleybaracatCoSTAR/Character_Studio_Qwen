@@ -4,6 +4,7 @@ import struct
 import time
 
 from .providers import synthetic_reference
+from .director import DirectorSettings
 from .turns import PhraseChunker, ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
 
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class LiveSession:
-    def __init__(self, providers, character, send_json, send_bytes, voice=None, trigger=None):
+    def __init__(self, providers, character, send_json, send_bytes, voice=None, trigger=None, director=None):
         self.providers = providers
         self.character = character
         self.send_json = send_json
@@ -24,6 +25,8 @@ class LiveSession:
         self.started = 0
         self.reply_pending = False
         self.generation_complete = False
+        self.director = director or DirectorSettings()
+        self.last_plan = None
         self.trigger = trigger
         self.trigger_active = False
         self.trigger_cleared = False
@@ -87,7 +90,28 @@ class LiveSession:
                 self.reply_pending = False
                 await self.send_json({"type":"empty_transcript", "turn_id":turn_id}); return
             await self.send_json({"type":"transcript", "turn_id":turn_id, "text":text, "source":"action" if action else "speech"})
-            if self.trigger and not action:
+            plan = None
+            if self.director.enabled:
+                check_started = time.perf_counter()
+                try:
+                    plan = await asyncio.wait_for(self.providers.direct(
+                        self.character,self.history.messages,text,self.director,self.voice,
+                        self.trigger,self.trigger_active,self.last_plan,action),6.5)
+                    metrics["director_ms"] = round((time.perf_counter()-check_started)*1000)
+                    if self.trigger and not action:
+                        if plan.trigger_action == "activate":
+                            await self.trigger_state(True,plan.evidence,source="director")
+                        elif plan.trigger_action == "release" and self.trigger_active:
+                            await self.trigger_state(False,plan.evidence,source="director")
+                    self.last_plan = plan
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    metrics["director_ms"] = round((time.perf_counter()-check_started)*1000)
+                    logger.warning("Director unavailable (%s).",type(exc).__name__)
+                    await self.send_json({"type":"director_note","turn_id":turn_id,"ok":False,
+                        "message":"Director unavailable. The actor will reply without a new note; current trigger state is unchanged."})
+            elif self.trigger and not action:
                 check_started = time.perf_counter()
                 try:
                     decision = await asyncio.wait_for(
@@ -108,14 +132,22 @@ class LiveSession:
                                           "message":"Context check unavailable. Current emotion is unchanged; the test action still works."})
             # Snapshot state per answer; live controls affect the next reply.
             active = self.trigger if self.trigger_active else None
-            delivery = Delivery(emotion=active.emotion if active else self.voice.emotion, event=self.voice.event,
-                                direction=active.delivery if active else self.voice.direction)
+            delivery = Delivery(emotion=active.emotion if active else plan.emotion if plan else self.voice.emotion,
+                                event=self.voice.event if self.voice.event != "none" else plan.event if plan else "none",
+                                direction=active.delivery if active else plan.delivery if plan else self.voice.direction)
+            if plan:
+                # Report and act the delivery that will really reach TTS, including trigger overrides.
+                plan = plan.model_copy(update={"emotion":delivery.emotion,"delivery":delivery.direction,"event":delivery.event})
+                await self.send_json({"type":"director_note","turn_id":turn_id,"ok":True,
+                                      **plan.model_dump(),"ms":metrics["director_ms"]})
             target = self.character
             if active:
                 target = self.character.model_copy(update={"beat":self.character.beat + "\n\n" + active.state_note(self.trigger_evidence)})
             elif self.trigger_cleared:
                 target = self.character.model_copy(update={"beat":self.character.beat +
                     "\n\nThe earlier trigger has been resolved by the director. Return to your normal emotional state and behaviour. You can remember what happened, but it is no longer an ongoing threat."})
+            if plan:
+                target = target.model_copy(update={"beat":target.beat + "\n\n" + plan.actor_note()})
             self.history.begin(turn_id, text)
             queue = asyncio.Queue(maxsize=2)
             expressive = delivery.emotion != "neutral" or bool(delivery.direction.strip())

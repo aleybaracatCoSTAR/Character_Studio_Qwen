@@ -45,6 +45,9 @@ def system_prompt(character: Character) -> str:
         "Correct false assumptions naturally. Do not invent a conflicting biography, body or relationship.",
         "Ask when an important fact is unknown. Do not claim a visitor performed an action without evidence.",
         "A story beat changes your present situation or feeling; it does not replace your identity.",
+        "Use the sheet as background. Answer the latest utterance, rather than repeating your biography, goal or fear.",
+        "Respond to support and new information. Develop the exchange with a concrete detail, practical choice or relevant question; do not keep returning to the same line.",
+        "You may improvise small present-moment details consistent with your world. Keep important identity and relationship facts fixed; do not invent major past events.",
         "Do not narrate stage directions, use markdown, or announce emotional labels.",
     ]
     labels = [("Name", "name"), ("Role", "role"), ("Fixed character facts", "about"),

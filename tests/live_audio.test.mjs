@@ -28,3 +28,22 @@ test('stopped playback cannot reopen the microphone from an old ended callback',
   player.setTurn(3);player.push(packet(3,0));player.phraseDone(0);player.responseDone();
   player.clear();context.sources[0].finish();assert.deepEqual(events,[]);assert.equal(idle,0);
 });
+
+// A new call starts turn IDs at 1. Its reply must never append to the previous character.
+import {Conversation} from '../frontend/live-transcript.mjs';
+test('new-call transcript clears old reply records and DOM while preserving the empty state',()=>{
+  function element(){return {children:[],hidden:false,textContent:'',append(...items){for(const item of items){item.parent=this;this.children.push(item);}},remove(){this.parent.children.splice(this.parent.children.indexOf(this),1);}};}
+  const oldDocument=globalThis.document;
+  globalThis.document={createElement:element};
+  try{
+    const container=element(),empty=element();container.append(empty);
+    const chat=new Conversation(container,empty);
+    chat.replies.set(1,chat.message('Anna','Press Start.'));
+    assert.equal(empty.hidden,true);assert.equal(container.children.length,2);
+    chat.reset();assert.equal(chat.replies.size,0);assert.equal(container.children.length,1);assert.equal(empty.hidden,false);
+    chat.replies.set(1,chat.message('Ali','I am working on a song.'));
+    assert.equal(chat.replies.get(1).node.children[0].textContent,'Ali');
+    assert.equal(chat.replies.get(1).content.textContent,'I am working on a song.');
+    assert.equal(container.children.length,2);
+  }finally{globalThis.document=oldDocument;}
+});

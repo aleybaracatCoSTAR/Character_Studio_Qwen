@@ -14,8 +14,9 @@ from studio.characters import Character, example
 from .providers import LocalProviders, SpeechRecognition
 from .session import LiveSession
 from .turns import TurnDetector
-from .voice import Delivery, MAX_START_BYTES, VoiceSettings
+from .voice import Delivery, MAX_START_BYTES, VoiceSettings, VOICE_DIRECTORY
 from .reactions import EmotionalTrigger
+from .director import DirectorSettings
 
 
 def create_app(preview=False, providers=None, vad_factory=None):
@@ -23,7 +24,9 @@ def create_app(preview=False, providers=None, vad_factory=None):
     services = providers or LocalProviders(SpeechRecognition(os.environ.get("LIVE_STT_MODEL_DIR"),
                                                            os.environ.get("LIVE_STT_DEVICE", "cpu")),
                                           os.environ.get("LIVE_LLM_URL", "http://127.0.0.1:18092"),
-                                          os.environ.get("LIVE_TTS_URL", "http://127.0.0.1:18093"))
+                                          os.environ.get("LIVE_TTS_URL", "http://127.0.0.1:18093"),
+                                          director_url=os.environ.get("LIVE_DIRECTOR_URL"),
+                                          director_model=os.environ.get("LIVE_DIRECTOR_MODEL", "live-character"))
     call_lock = asyncio.Lock()
 
     @asynccontextmanager
@@ -47,11 +50,19 @@ def create_app(preview=False, providers=None, vad_factory=None):
     @app.get("/api/example")
     def character(): return example().model_dump()
 
+    @app.get("/api/voice/{preset}")
+    def voice_preview(preset: str):
+        from fastapi import HTTPException
+        if preset not in ("female", "male"): raise HTTPException(status_code=404)
+        return FileResponse(VOICE_DIRECTORY / f"{preset}.wav",media_type="audio/wav")
+
     @app.get("/api/status")
     async def status():
         health = {"stt":False,"llm":False,"tts":False} if preview else await services.health()
         return {"preview":preview,"ready":all(health.values()),"services":health,
-                "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None)}
+                "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
+                "director":{"model":getattr(services,"director_model","live-character"),
+                            "shared_model":getattr(services,"director_url",None)==getattr(services,"llm_url",None) and getattr(services,"director_model","live-character")=="live-character"}}
 
     @app.websocket("/api/live")
     async def live(socket: WebSocket):
@@ -81,19 +92,20 @@ def create_app(preview=False, providers=None, vad_factory=None):
             selected = Character.model_validate(config.get("character"))
             voice = VoiceSettings.model_validate(config.get("voice", {}))
             trigger = EmotionalTrigger.model_validate(config["trigger"]) if config.get("trigger") is not None else None
+            director = DirectorSettings.model_validate(config.get("director", {}))
             if vad_factory:
                 detector = vad_factory()
             else:
                 import webrtcvad
                 vad = webrtcvad.Vad(2)
                 detector = TurnDetector(lambda pcm:vad.is_speech(pcm,16000))
-            session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger)
+            session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director)
             listen_after = 0.0
             def clear_microphone():
                 detector.pending.clear(); detector.reset()
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
                              "endpoint_ms":480, "turn_taking":"Stop reply to interrupt; mic resumes after playback",
-                             "voice":"uploaded reference" if voice.reference_audio else "first generated phrase anchors this call"})
+                             "voice":"uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated phrase anchors this call"})
             while True:
                 message = await socket.receive()
                 if message["type"] == "websocket.disconnect": break
@@ -138,6 +150,8 @@ def create_app(preview=False, providers=None, vad_factory=None):
                     elif command.get("type") == "delivery":
                         delivery = Delivery.model_validate(command.get("settings"))
                         session.voice = session.voice.model_copy(update=delivery.model_dump())
+                    elif command.get("type") == "director":
+                        session.director = DirectorSettings.model_validate(command.get("settings"))
                     elif command.get("type") == "trigger":
                         clear_microphone()
                         await session.fire_trigger()
