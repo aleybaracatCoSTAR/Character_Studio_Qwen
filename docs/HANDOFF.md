@@ -10,9 +10,11 @@ Character editing, browser-local character saving, JSON download, prompt inspect
 
 ## Validation and remaining work
 
+Update, 23 October 2026: a real standalone Drama 3 request through the Mac SSH tunnel succeeded for "Hello, I am Anna." with no client warmup and a 120-token cap. First PCM arrived at 3.084 s, the complete response at 3.304 s, producing 2.786 s of 44.1 kHz mono audio. This validates one TTS request and transport, not character quality or the full live pipeline. The previous HTTP 400 came from sending `sample_rate`; the endpoint rejects that field even at its native rate, so both clients now omit it. The test client also reports the server error body. Generated media remains outside Git.
+
 Update, 22 October 2026: the user launched the baseline on Surrey and reports that it is too slow for the intended live experience. A separate **live STT → small Qwen text model → Drama 3 pipeline is now implemented**; see [setup](LIVE_SETUP.md) and [mode comparison](LIVE_VOICE.md). It has not been run against the actual three model services on H200. The user encountered mismatched vLLM/Omni and Torch/Audio CUDA installations during the standalone Drama 3 test. The installer now pins the serving pair and all three CUDA 13.0 Torch-family wheels and checks CLI imports before model load.
 
-46 Python tests pass: 23 baseline checks, five standalone Drama 3 client checks and 18 live checks. Six Node tests cover chunked resampling, packet encoding, scheduled playback, interruption and honest phrase acknowledgements. JavaScript and shell syntax checks pass. Baseline and live preview pages have been inspected in a browser, including character-name edits. These checks do not validate inference, microphone hardware or model output quality.
+47 Python tests pass: 23 baseline checks, six standalone Drama 3 client checks and 18 live checks. Six Node tests cover chunked resampling, packet encoding, scheduled playback, interruption and honest phrase acknowledgements. JavaScript and shell syntax checks pass. Baseline and live preview pages have been inspected in a browser, including character-name edits. These checks do not validate inference, microphone hardware or model output quality.
 
 ## Live runtime handoff
 
@@ -28,7 +30,7 @@ Pinned text model: `Qwen/Qwen3-4B-Instruct-2507` at `cdbee75f17c01a7cc42f958dc65
 
 The next required integration check is the combined H200 startup, followed by warmed typed and microphone turns, mid-reply interruption and a voice-consistency listening test. Capture resolved Linux dependencies and measured VRAM after success. The experimental GPU budgets total 75%; they are not a proven memory result. Character instructions guide output but do not guarantee fact consistency. Shorter streaming waits do not establish stronger narrative intelligence.
 
-**GPU inference has not been independently validated by the agent.** Use the interactive H200 recipe in `SURREY.md` for the baseline. Measure peak VRAM, first response time, text-only output, recorded voice input and spoken output. Try all three speakers. Capture the model's contradictions verbatim before modifying the prompt. A passing application check is not evidence of better narrative intelligence.
+**The original Qwen-Omni baseline and the complete live stack have not been independently validated on GPU by the agent.** The standalone Drama 3 request above is the limited verified exception. Use the interactive H200 recipe in `SURREY.md` for the baseline. Measure peak VRAM, first response time, text-only output, recorded voice input and spoken output. Try all three speakers. Capture the model's contradictions verbatim before modifying the prompt. A passing application check is not evidence of better narrative intelligence.
 
 ## Pinned starting point
 

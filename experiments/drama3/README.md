@@ -93,4 +93,10 @@ Stop the Drama 3 server with Ctrl+C. When you are done with the allocation, use 
 
 ## Validation
 
-The client and request/stream handling have CPU tests. No Drama 3 model inference, GPU memory use, voice quality or live playback has been validated for this repository yet. The client reports end-to-end transport timing, not a promise of the model card's benchmark numbers.
+On 23 October 2026, a real request through the Mac-to-Surrey SSH tunnel succeeded for "Hello, I am Anna." with `--warmup 0 --max-tokens 120`: first PCM at 3.084 s, complete response at 3.304 s, 2.786 s of mono 44.1 kHz audio. This is one request, not a warmed latency benchmark or a voice-quality evaluation. Generated files stay in ignored `outputs/`, not Git.
+
+The request must **omit `sample_rate`**: this pinned Drama 3 endpoint rejects it, including a value of 44100. The client writes returned PCM at the model's native 44.1 kHz. Both the standalone client and live provider use this contract. Server validation errors now include the response's actual reason rather than only "400 Bad Request".
+
+The user also reached a warmup crash because FlashInfer sampling tried to invoke missing `ninja`. For that specific path, `export VLLM_USE_FLASHINFER_SAMPLER=0` before launch selects vLLM's native GPU sampler. This does not disable all FlashInfer components. Keep the existing matched CUDA wheels. Kernel setup is separate from request validation.
+
+The client and request/stream handling have CPU tests. Combined live-stack GPU memory use, microphone interaction and expressive voice consistency remain unvalidated. The client reports end-to-end transport timing, not a promise of the model card's benchmark numbers.

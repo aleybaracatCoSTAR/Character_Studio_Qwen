@@ -4,7 +4,7 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 
 **Live voice experiment added:** [Follow the live setup guide](docs/LIVE_SETUP.md) for continuous microphone input, automatic pause detection, interruption and streamed Drama 3 speech. That mode uses English Faster-Whisper + a small Qwen3-4B text model + Drama 3, separately from the original Qwen-Omni 30B baseline described below. [View the live UI preview](docs/screenshots/live-preview.jpg).
 
-**Status: starter prototype.** CPU transport tests and browser checks pass. Actual GPU inference, combined H200 memory use, spoken quality and live response time still need validation on Surrey. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
+**Status: starter prototype.** CPU transport tests and browser checks pass. A short standalone Drama 3 synthesis succeeded on Surrey through the Mac SSH tunnel on 23 October 2026; [details](experiments/drama3/README.md#validation). The full live stack, combined H200 memory use, spoken quality and live response time still need validation. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
 
 ![Character sheet and conversation preview](docs/screenshots/studio-preview.jpg)
 
@@ -74,7 +74,7 @@ node --test tests/live_audio.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-46 Python tests and six JavaScript audio tests exercise app contracts, turn detection, streamed provider responses, interruption and playback acknowledgements. They use explicit test doubles for inference and do not demonstrate model quality or real GPU speed.
+47 Python tests and six JavaScript audio tests exercise app contracts, turn detection, streamed provider responses, interruption and playback acknowledgements. They use explicit test doubles for inference and do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

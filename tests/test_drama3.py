@@ -2,9 +2,11 @@ from io import BytesIO
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 import wave
 
-from experiments.drama3.test_voice import build_payload, stream_pcm, listening_page, RATE
+from experiments.drama3.test_voice import build_payload, stream_pcm, listening_page, generate, RATE
 
 
 class Response(BytesIO):
@@ -17,8 +19,16 @@ class DramaTests(unittest.TestCase):
     def test_requests_raw_stream_not_finished_wav(self):
         data=build_payload("Hello")
         self.assertTrue(data["stream"]); self.assertEqual(data["stream_format"],"audio")
-        self.assertEqual(data["response_format"],"pcm"); self.assertEqual(data["sample_rate"],44100)
+        self.assertEqual(data["response_format"],"pcm")
         self.assertNotIn("ref_audio",data)
+        self.assertNotIn("sample_rate",data)
+
+    def test_server_validation_error_includes_its_reason(self):
+        body=BytesIO(b'{"error":{"message":"sample_rate is not supported by the current TTS model"}}')
+        error=HTTPError('http://local.invalid/v1/audio/speech',400,'Bad Request',{},body)
+        with patch('experiments.drama3.test_voice.urlopen',side_effect=error):
+            with self.assertRaisesRegex(ValueError,'sample_rate is not supported'):
+                generate('http://local.invalid',build_payload('Hello'),'unused.wav')
 
     def test_reference_requires_transcript_and_preserves_local_bytes(self):
         with tempfile.TemporaryDirectory() as folder:

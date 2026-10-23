@@ -92,7 +92,7 @@ class LocalProviders:
 
     async def audio(self, text, reference=None):
         payload = {"model":"fishaudio/drama-3", "input":text, "voice":"default", "stream":True,
-                   "stream_format":"audio", "response_format":"pcm", "sample_rate":OUTPUT_RATE,
+                   "stream_format":"audio", "response_format":"pcm",
                    "max_new_tokens":max(100, min(400, len(text.split()) * 13 + 32))}
         if reference:
             payload["ref_audio"], payload["ref_text"] = reference

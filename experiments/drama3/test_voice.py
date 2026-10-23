@@ -30,7 +30,7 @@ def build_payload(text, max_tokens=300, reference=None, transcript=None):
     if bool(reference) != bool(transcript):
         raise ValueError("A reference WAV and its exact transcript must be supplied together.")
     data = {"model": MODEL, "input": text, "voice": "default", "stream": True,
-            "stream_format": "audio", "response_format": "pcm", "sample_rate": RATE,
+            "stream_format": "audio", "response_format": "pcm",
             "max_new_tokens": max_tokens}
     if reference:
         audio = Path(reference).read_bytes()
@@ -88,6 +88,14 @@ def generate(base_url, payload, output, play=False):
     try:
         with urlopen(request, timeout=180) as response:
             return stream_pcm(response, output, started, player)
+    except HTTPError as exc:
+        detail = exc.read(8192).decode("utf-8", errors="replace")
+        try:
+            error = json.loads(detail).get("error", {})
+            detail = error.get("message", detail) if isinstance(error, dict) else str(error)
+        except (ValueError, AttributeError):
+            pass
+        raise ValueError(f"TTS server returned HTTP {exc.code}: {detail[:2000] or exc.reason}") from exc
     finally:
         if player:
             try: player.stdin.close()

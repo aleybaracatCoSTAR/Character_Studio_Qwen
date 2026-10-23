@@ -157,6 +157,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             audio=[part async for part in providers.audio("Hello",("data:audio/wav;base64,AAAA","Reference"))]
             self.assertEqual(text,["Hello"]);self.assertEqual(b"".join(audio),b"\x01\x02\x03\x04")
             self.assertTrue(requests[0]["stream"]);self.assertEqual(requests[1]["stream_format"],"audio")
+            self.assertNotIn("sample_rate",requests[1])
             self.assertEqual(requests[1]["ref_text"],"Reference");self.assertTrue(stream.closed)
         finally: await providers.close()
 
