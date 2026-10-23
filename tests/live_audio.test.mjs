@@ -11,3 +11,20 @@ test('resampling across packets agrees with one continuous buffer',()=>{for(cons
 test('playback acknowledgements wait until the phrase actually finishes',()=>{const context=fakeContext(),acks=[];const player=new PCMPlayback(context,x=>acks.push(x),()=>{},()=>{});player.setTurn(1);player.push(packet(1,0));player.phraseDone(0);assert.equal(acks.length,0);context.sources[0].finish();assert.deepEqual(acks,[{type:'played',turn_id:1,seq:0}]);});
 test('interruption discards queued sources without claiming they were played',()=>{const context=fakeContext(),acks=[];const player=new PCMPlayback(context,x=>acks.push(x),()=>{},()=>{});player.setTurn(1);player.push(packet(1,0));player.phraseDone(0);player.clear();assert.equal(acks.length,0);player.setTurn(2);player.push(packet(1,1));assert.equal(context.sources.length,1);});
 test('out-of-order ended callbacks still acknowledge phrases in order',()=>{const context=fakeContext(),acks=[];const player=new PCMPlayback(context,x=>acks.push(x.seq),()=>{},()=>{});player.setTurn(7);player.push(packet(7,0));player.push(packet(7,1));player.phraseDone(0);player.phraseDone(1);context.sources[1].finish();assert.deepEqual(acks,[]);context.sources[0].finish();assert.deepEqual(acks,[0,1]);});
+test('microphone release waits for final playback and is emitted once',()=>{
+  const context=fakeContext(),events=[];let idle=0;
+  const player=new PCMPlayback(context,event=>events.push(event),()=>{},()=>idle++);
+  player.setTurn(3);player.push(packet(3,0));player.push(packet(3,1));
+  player.phraseDone(0);player.phraseDone(1);player.responseDone();
+  assert.deepEqual(events,[]);assert.equal(idle,0);
+  context.sources[0].finish();assert.equal(events.length,1);assert.equal(idle,0);
+  context.sources[1].finish();
+  assert.deepEqual(events,[{type:'played',turn_id:3,seq:0},{type:'played',turn_id:3,seq:1},{type:'playback_done',turn_id:3}]);
+  assert.equal(idle,1);player.acknowledge();assert.equal(idle,1);
+});
+test('stopped playback cannot reopen the microphone from an old ended callback',()=>{
+  const context=fakeContext(),events=[];let idle=0;
+  const player=new PCMPlayback(context,event=>events.push(event),()=>{},()=>idle++);
+  player.setTurn(3);player.push(packet(3,0));player.phraseDone(0);player.responseDone();
+  player.clear();context.sources[0].finish();assert.deepEqual(events,[]);assert.equal(idle,0);
+});

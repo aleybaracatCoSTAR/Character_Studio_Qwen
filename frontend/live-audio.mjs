@@ -43,7 +43,9 @@ export class PCMPlayback {
       const record=this.phrases.get(this.nextAck);if(!record.done||record.pending||record.acked)break;
       record.acked=true;this.send({type:'played',turn_id:this.turn,seq:this.nextAck});this.nextAck++;
     }
-    if(this.finished&&!this.sources.size&&[...this.phrases.values()].every(p=>p.acked)){this.finished=false;this.onIdle();}
+    if(this.finished&&!this.sources.size&&[...this.phrases.values()].every(p=>p.acked)){
+      this.finished=false;this.send({type:'playback_done',turn_id:this.turn});this.onIdle();
+    }
   }
   clear(){
     for(const holder of this.sources){holder.cancelled=true;try{holder.source.stop();holder.source.disconnect();}catch(error){}}

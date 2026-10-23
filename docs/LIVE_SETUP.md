@@ -1,8 +1,8 @@
 # Live microphone + character + Drama 3
 
-This experimental mode connects **English speech recognition → Qwen3-4B-Instruct-2507 → Drama 3**. Start a call once, speak, pause, and hear streamed phrases. Speaking again cancels the previous reply. The original Qwen3-Omni 30B recorded-turn mode remains available separately.
+This experimental mode connects **English speech recognition → Qwen3-4B-Instruct-2507 → Drama 3**. Start a call once, speak, pause, and hear streamed phrases. The microphone waits while the character generates and plays a reply. Use **Stop reply** to take over. The original Qwen3-Omni 30B recorded-turn mode remains available separately.
 
-**Status:** application, transport, cancellation and audio scheduling have CPU tests. The browser preview has been inspected. The complete three-service GPU stack, combined VRAM use, voice consistency and conversational delay still need a Surrey H200 test. This is not native full-duplex speech generation. Recognition finalises each utterance after a pause.
+**Status, 23 October 2026:** all three real Surrey services started and `/api/status` reported them ready. The first speaker-based microphone test repeatedly cancelled replies, exposing an overly eager VAD interruption path. The new protected turn-taking, voice reference, delivery and emotional-trigger controls have CPU tests and a browser preview; microphone behaviour and expressive delivery still need a listening test after deploying this update. Combined VRAM has not been measured. This is not native full-duplex speech generation. Recognition finalises each utterance after a pause.
 
 ## 1. Prepare on Surrey
 
@@ -73,11 +73,27 @@ Replace `costar07` if your allocation uses another node. Leave the tunnel open a
 1. Choose **Show details**, edit Anna, then wait for **Voice services ready**.
 2. Choose **Test with text** to check reasoning and streamed playback without a microphone.
 3. End that session, choose **Start call**, and grant microphone access. Speak a short sentence and pause for about half a second.
-4. Speak again during a reply to interrupt, or choose **Stop reply**. Only phrases that finished playing enter the model's remembered response.
+4. Let the answer finish, or choose **Stop reply** to take over. Only phrases that finished playing enter the model's remembered response. The microphone resumes 350 ms after playback, allowing speaker echo to decay.
 
-Headphones help prevent output returning through the microphone. The endpoint uses 480 ms of silence; each utterance is capped at 15 seconds. Transcripts are produced after each detected utterance, not word by word.
+Headphones help prevent output returning through the microphone. The server discards microphone frames throughout recognition/generation/playback and the echo tail, rather than buffering them as another turn. The endpoint uses 480 ms of silence; each utterance is capped at 15 seconds. Transcripts are produced after each detected utterance, not word by word.
 
-Short text clauses go to Drama 3 before the full answer finishes. Raw audio chunks are scheduled immediately in Web Audio. Each call's first generated phrase becomes a synthetic voice reference for later phrases. This does not guarantee voice consistency and does not clone the participant's voice. The speaking-style field guides dialogue; precise emotional delivery needs a separate evaluation.
+Short text clauses go to Drama 3 before the full answer finishes. Raw audio chunks are scheduled immediately in Web Audio. Without an uploaded reference, each call's first generated phrase becomes a synthetic voice reference for later phrases. This does not guarantee voice consistency and does not clone the participant's microphone input.
+
+### Voice and emotion
+
+Open **How they speak**. The speaking-style text guides the dialogue. **Emotion** (Natural, Calm, Excited, Sad, Angry, Anxious or Whispering) and **Expression** (None, Sigh or Laugh) add inline Drama 3 delivery tags to TTS input. These two controls remain available during a call and apply to the next answer. Tags stay out of visible dialogue and conversation history. Events are inserted once per answer. Short single-word phrases receive no tag.
+
+To select a different voice, choose a **2–15 second uncompressed PCM16 WAV**, mono or stereo at 8–48 kHz, no larger than 2 MB, and enter its exact spoken words. The browser previews the selected clip, then sends it in the bounded start message. Drama 3 receives it as `ref_audio` plus `ref_text`. It is kept in RAM for the call, not written into the character profile or automatically saved to browser storage. Reselect it after reloading. End the call before changing a reference.
+
+This is voice conditioning, not a named preset-voice catalogue. Emotional tags are natural-language cues rather than guaranteed acoustic settings. They are inserted after the opening words because leading tags can stall some takes. See the [Drama 3 recipe](https://recipes.vllm.ai/fishaudio/drama-3#event-and-emotion-tags) and [model examples](https://huggingface.co/fishaudio/drama-3).
+
+### Emotional trigger: Anna's reset button
+
+Open **Emotional trigger**. Anna starts with an editable example: **Press reset → Anxious → fear of losing her memories; ask the visitor to stop**. Configure the stage action, feeling and changed behaviour before the call. During the call, **Press reset** fires it immediately and produces a reaction; this intentional stage action may interrupt the current answer. **Clear reaction** resolves the state for subsequent answers. Core identity and biography remain intact.
+
+The default exact spoken cue is **“I pressed your reset button”**. Once recognised, it activates the same state before dialogue and audio generation. Questions such as “What does your reset button do?” do not activate it. This is explicit cue matching, not general intent recognition. The action button is a rehearsal control; no physical reset-button hardware is connected yet.
+
+The active state persists across replies, adds the behavioural direction to the current scene prompt and overrides vocal emotion with `[anxious]` (or the selected trigger emotion). Clearing it restores the ordinary voice setting and tells the character the threat is resolved. The model still needs to be evaluated for how convincingly it performs that state.
 
 ## 6. Measure rather than guess
 
@@ -93,7 +109,7 @@ End the call, then press Ctrl+C in the launch terminal. The script terminates on
 
 `live_voice/app.py` owns one same-origin WebSocket call. `turns.py` detects utterances and bounds history. `providers.py` wraps local STT, streamed text and streamed TTS. `session.py` runs the pipeline and cancels requests. `frontend/live.js` handles the microphone; `live-audio.mjs` schedules playback and acknowledges completed phrases. Audio frames carry turn and phrase IDs so old chunks are discarded after interruption.
 
-Character details are saved in the local browser. The live app keeps audio and conversation in RAM for the active call, does not write recordings or transcripts, and sends inference requests to the configured local services. Review those services' logs and the host environment before using sensitive material. The single-caller localhost setup is not a public multi-user deployment.
+Character details, trigger definitions and ordinary delivery selections are saved in the local browser. Reference clips are not. The live app keeps audio and conversation in RAM for the active call, does not write recordings or transcripts, and sends inference requests to the configured local services. Review those services' logs and the host environment before using sensitive material. The single-caller localhost setup is not a public multi-user deployment.
 
 ## UI-only preview
 

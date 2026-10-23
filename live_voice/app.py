@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import json
 import os
 from pathlib import Path
+import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -13,6 +14,8 @@ from studio.characters import Character, example
 from .providers import LocalProviders, SpeechRecognition
 from .session import LiveSession
 from .turns import TurnDetector
+from .voice import Delivery, MAX_START_BYTES, VoiceSettings
+from .reactions import EmotionalTrigger
 
 
 def create_app(preview=False, providers=None, vad_factory=None):
@@ -70,31 +73,45 @@ def create_app(preview=False, providers=None, vad_factory=None):
             health = await services.health()
             if not all(health.values()):
                 await send_json({"type":"error", "message":"Start speech recognition, the text model and Drama 3 first."}); return
-            config = await asyncio.wait_for(socket.receive_json(), timeout=15)
+            initial = await asyncio.wait_for(socket.receive_text(), timeout=15)
+            if len(initial.encode("utf-8")) > MAX_START_BYTES: raise ValueError("Voice reference is too large.")
+            config = json.loads(initial)
             if not isinstance(config, dict) or config.get("type") != "start":
                 raise ValueError("Start a character call first.")
             selected = Character.model_validate(config.get("character"))
+            voice = VoiceSettings.model_validate(config.get("voice", {}))
+            trigger = EmotionalTrigger.model_validate(config["trigger"]) if config.get("trigger") is not None else None
             if vad_factory:
                 detector = vad_factory()
             else:
                 import webrtcvad
                 vad = webrtcvad.Vad(2)
                 detector = TurnDetector(lambda pcm:vad.is_speech(pcm,16000))
-            session = LiveSession(services, selected, send_json, send_bytes)
+            session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger)
+            listen_after = 0.0
+            def clear_microphone():
+                detector.pending.clear(); detector.reset()
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
-                             "endpoint_ms":480, "voice":"first generated phrase anchors this call"})
+                             "endpoint_ms":480, "turn_taking":"Stop reply to interrupt; mic resumes after playback",
+                             "voice":"uploaded reference" if voice.reference_audio else "first generated phrase anchors this call"})
             while True:
                 message = await socket.receive()
                 if message["type"] == "websocket.disconnect": break
                 if message.get("bytes") is not None:
                     packet = message["bytes"]
                     if len(packet) > 8192 or len(packet) % 2: raise ValueError("Invalid microphone frame.")
+                    # Speech detection alone cannot distinguish a person from speaker echo or noise.
+                    # Discard input while generating AND playing; do not buffer it for the next turn.
+                    if session.reply_pending or time.monotonic() < listen_after:
+                        clear_microphone()
+                        continue
                     for event, pcm, endpoint_ms in detector.feed(packet):
                         if event == "start":
-                            await session.interrupt()
                             await send_json({"type":"speech_start"})
                         elif event == "utterance":
                             await session.begin(pcm=pcm, endpoint_ms=endpoint_ms)
+                            clear_microphone()
+                            break
                         elif event == "noise": await send_json({"type":"listening"})
                 elif message.get("text") is not None:
                     if len(message["text"]) > 16000: raise ValueError("Control message too long.")
@@ -105,18 +122,39 @@ def create_app(preview=False, providers=None, vad_factory=None):
                         if type(turn) is not int or type(sequence) is not int:
                             raise ValueError("Invalid playback acknowledgement.")
                         session.history.acknowledge(turn,sequence)
+                    elif command.get("type") == "playback_done":
+                        turn = command.get("turn_id")
+                        if type(turn) is not int: raise ValueError("Invalid playback completion.")
+                        if session.playback_done(turn):
+                            clear_microphone()
+                            # Allow loudspeaker audio to decay before accepting another utterance.
+                            listen_after = time.monotonic() + 0.35
                     elif command.get("type") == "text":
                         text = command.get("text","")
                         if not isinstance(text,str) or not 0 < len(text.strip()) <= 2000: raise ValueError("Enter a short message.")
                         await session.begin(text=text.strip())
                     elif command.get("type") == "mute":
-                        detector.pending.clear(); detector.reset()
+                        clear_microphone()
+                    elif command.get("type") == "delivery":
+                        delivery = Delivery.model_validate(command.get("settings"))
+                        session.voice = session.voice.model_copy(update=delivery.model_dump())
+                    elif command.get("type") == "trigger":
+                        clear_microphone()
+                        await session.fire_trigger()
+                    elif command.get("type") == "clear_trigger":
+                        await session.trigger_state(False)
                     elif command.get("type") == "interrupt":
                         await session.interrupt()
+                        clear_microphone()
+                        listen_after = time.monotonic() + 0.35
                     elif command.get("type") == "stop": break
         except (WebSocketDisconnect, asyncio.TimeoutError):
             pass
-        except (ValueError, ValidationError, json.JSONDecodeError):
+        except ValidationError as exc:
+            reason = exc.errors(include_input=False)[0]["msg"]
+            try: await send_json({"type":"error", "message":"Check the call settings: " + reason})
+            except RuntimeError: pass
+        except (ValueError, json.JSONDecodeError):
             try: await send_json({"type":"error", "message":"Check the character fields and reconnect."})
             except RuntimeError: pass
         finally:

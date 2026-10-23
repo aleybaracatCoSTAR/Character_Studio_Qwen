@@ -18,10 +18,12 @@ def main():
     import uvicorn
     if args.live:
         from live_voice.app import create_app as create_live_app
+        from live_voice.voice import MAX_START_BYTES
         app = create_live_app(preview=args.preview)
     else:
         app = create_app(QwenEngine(args.preview, args.model_dir, args.attention))
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info", access_log=False, ws_max_size=65536)
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info", access_log=False,
+                ws_max_size=MAX_START_BYTES if args.live else 65536)
 
 
 if __name__ == "__main__":
