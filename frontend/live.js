@@ -1,5 +1,6 @@
 import {StreamResampler,pcm16,PCMPlayback} from './live-audio.mjs';
 import {Conversation} from './live-transcript.mjs';
+import {StoryEditor} from './live-story.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 let socket=null,context=null,stream=null,capture=null,playback=null,connecting=false,muted=false,ready=false,currentTurn=0;
@@ -14,6 +15,39 @@ function triggerSettings(){return $('trigger-enabled').checked?{
   behaviour:$('trigger-behaviour').value,spoken_cue:$('trigger-cue').value,delivery:$('trigger-delivery').value
 }:null;}
 const replies=conversation.replies;
+let storyView=null;
+const storyEditor=new StoryEditor($('beat-editor'),saveStory);
+function narrativeSettings(){return {enabled:$('story-enabled').checked,mode:$('story-mode').value,beats:storyEditor.values()};}
+function saveStory(){
+  $('story-settings').hidden=!$('story-enabled').checked;
+  try{localStorage.setItem('live-story-v1',JSON.stringify(narrativeSettings()));}catch(error){}
+  if(!socket)previewStory();
+}
+function previewStory(){
+  const settings=narrativeSettings();
+  renderStory({enabled:settings.enabled&&settings.beats.length>0,index:0,count:settings.beats.length,
+    titles:settings.beats.map(beat=>beat.title),current:settings.beats[0],mode:settings.mode,elapsed:0,preview:true});
+}
+function renderStory(data){
+  storyView=data;$('story-stage').hidden=!data.enabled;
+  if(!data.enabled)return;
+  $('story-title').textContent=data.finished?'Story complete':`${data.index+1}/${data.count} · ${data.current.title}`;
+  $('story-clock').textContent=data.preview?'Script preview':data.finished?'Finished':`${data.paused?'Held · ':''}${Math.floor(data.elapsed)} s · ${data.current.min_seconds}–${data.current.max_seconds} s`;
+  $('story-goal').textContent=data.current.goal;$('story-entry').textContent=data.current.note;
+  $('beat-progress').replaceChildren();
+  data.titles.forEach((title,index)=>{const item=document.createElement('li');item.textContent=String(index+1);item.title=title;item.className=index===data.index?'current':index<data.index?'past':'';
+    if(index===data.index)item.setAttribute('aria-current','step');$('beat-progress').append(item);});
+  $('hold-story').textContent=data.paused?'Resume':'Hold';$('next-beat').textContent=data.index===data.count-1?'Finish story':'Next beat →';
+  $('story-reason').textContent=data.preview?'Start a call to run the arc.':data.pending?'Beat change queued until this reply finishes.':`${data.mode} · ${data.reason}${data.evidence?' · '+data.evidence:''}${data.director_note?' · '+data.director_note:''}`;
+  storyControls();
+}
+function storyControls(){
+  const live=sessionReady&&socket?.readyState===WebSocket.OPEN&&storyView?.enabled;
+  $('previous-beat').disabled=!live||(!storyView.index&&!storyView.finished);
+  $('next-beat').disabled=!live||storyView.finished;
+  $('hold-story').disabled=!live||storyView.finished;
+  $('cue-beat').disabled=!live||storyView.finished||replyPending;
+}
 function character(){return Object.fromEntries(fields.map(key=>[key,form.elements[key].value]));}
 function feedback(message=''){$('feedback').textContent=message;}
 function state(message){$('call-state').textContent=message;}
@@ -51,7 +85,7 @@ function controls(){
   for(const element of form.elements)element.disabled=element.dataset.liveSetting?connecting:!!connected||connecting;
   $('test-trigger').disabled=!connected||!sessionReady||!$('trigger-enabled').checked;
   $('clear-trigger').disabled=!connected||!sessionReady||!triggerActive;
-  document.querySelector('.live-badge').classList.toggle('active',!!connected);
+  document.querySelector('.live-badge').classList.toggle('active',!!connected);storyControls();
 }
 function message(speaker,text,kind='assistant'){return conversation.message(speaker,text,kind);}
 async function disconnect(){
@@ -69,9 +103,12 @@ async function disconnect(){
   return disconnecting;
 }
 function event(data){
+  if(data.type==='story_state'){renderStory(data);return;}
+  if(data.type==='story_decision'){$('story-reason').textContent=`Director held this beat: ${data.reason}`;return;}
+  if(data.type==='director_ack'){feedback(data.message);return;}
   if(data.type==='director_note'){
     if(data.turn_id!==currentTurn)return;
-    $('director-note').textContent=data.ok?`Intention: ${data.intention}\nVoice: ${data.emotion} · ${data.delivery}${data.evidence?'\nEvidence: '+data.evidence:''}`:data.message;
+    $('director-note').textContent=data.ok?`Intention: ${data.intention}\nVoice: ${data.emotion} · ${data.delivery}${data.evidence?'\nEmotion evidence: '+data.evidence:''}${data.beat_evidence?'\nBeat evidence: '+data.beat_evidence:''}`:data.message;
     $('director-latest').hidden=false;state('Thinking… · Mic paused');return;
   }
   if(data.type==='trigger_state'){
@@ -104,6 +141,10 @@ function event(data){
 }
 async function connect(useMic=true){
   if(connecting)return;if(socket){await disconnect();return;}if(!form.reportValidity())return;
+  const outline=narrativeSettings();
+  if(outline.enabled&&(!outline.beats.length||outline.beats.some(beat=>!beat.title.trim()||!beat.goal.trim()||!Number.isFinite(beat.min_seconds)||!Number.isFinite(beat.max_seconds)||beat.max_seconds<=beat.min_seconds))){
+    feedback('Give every beat a title and goal, with a maximum time greater than its minimum.');return;
+  }
   connecting=true;feedback();controls();
   try{
     conversation.reset();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
@@ -121,7 +162,7 @@ async function connect(useMic=true){
     opened.onerror=()=>{if(socket===opened)feedback('Cannot connect to the live server. Check its terminal and SSH tunnel.');};
     opened.onclose=async()=>{if(socket===opened){feedback('Live connection closed. Check that all three services are ready.');await disconnect();}};
     await new Promise((resolve,reject)=>{opened.onopen=resolve;opened.addEventListener('error',reject,{once:true});opened.addEventListener('close',()=>reject(new Error('Connection closed')),{once:true});});
-    send({type:'start',character:character(),voice,trigger:triggerSettings(),director:directorSettings()});
+    send({type:'start',character:character(),voice,trigger:triggerSettings(),director:directorSettings(),narrative:narrativeSettings()});
     if(useMic){
       const source=context.createMediaStreamSource(stream),gain=context.createGain();gain.gain.value=0;
       capture=new AudioWorkletNode(context,'live-capture');const resampler=new StreamResampler(context.sampleRate);
@@ -175,6 +216,18 @@ for(const id of ['trigger-enabled','trigger-action','trigger-condition','trigger
 });
 $('test-trigger').addEventListener('click',()=>{holdMicrophone();send({type:'trigger'});});
 $('clear-trigger').addEventListener('click',()=>send({type:'clear_trigger'}));
+$('send-direction').addEventListener('click',()=>{const settings=directorSettings();send({type:'director',settings});
+  try{localStorage.setItem('live-director-v1',JSON.stringify(settings));}catch(error){}
+  if(!socket)feedback('Direction saved for your next call.');
+});
+for(const id of ['story-enabled','story-mode'])$(id).addEventListener('change',saveStory);
+$('add-beat').addEventListener('click',()=>{storyEditor.add();controls();});
+$('load-story-example').addEventListener('click',async()=>{
+  const settings=await(await fetch('/api/story/example')).json();storyEditor.load(settings.beats);
+  $('story-enabled').checked=true;$('story-mode').value=settings.mode;saveStory();controls();
+});
+for(const [id,action] of [['next-beat','next'],['previous-beat','previous'],['cue-beat','cue']])$(id).addEventListener('click',()=>send({type:'story',control:{action}}));
+$('hold-story').addEventListener('click',()=>send({type:'story',control:{action:storyView?.paused?'resume':'pause'}}));
 for(const id of ['director-enabled','director-input'])$(id).addEventListener('change',()=>{
   const settings=directorSettings();send({type:'director',settings});
   try{localStorage.setItem('live-director-v1',JSON.stringify(settings));}catch(error){}
@@ -185,7 +238,7 @@ async function status(){
     $('status').textContent=data.preview?'Design preview':ready?'Voice services ready':'Services starting…';$('status').className=ready?'ready':'';
     $('mode-note').textContent=data.preview?'Design preview. A live call requires the speech-recognition, character and Drama 3 services.':ready?'Speak and pause to hear a reply. Your mic waits until the answer finishes. Use Stop reply to take over.':data.stt_error||Object.entries(data.services).map(([name,ok])=>`${name.toUpperCase()}: ${ok?'ready':'not ready'}`).join(' · ');
     if(data.busy&&!socket){ready=false;$('mode-note').textContent='Another voice session is active. End that call before starting a new one.';}
-    if(data.director)$('director-model').textContent=data.director.shared_model?'Separate director call · shares the running Qwen model':`Director model: ${data.director.model}`;
+    if(data.models)$('director-model').textContent=`${data.profile} · Actor: ${data.models.actor.split('/').pop()} · Director: ${data.models.director.split('/').pop()}${data.director.shared_model?' (shared server)':''}`;
     controls();
   }catch(error){ready=false;$('status').textContent='Server disconnected';controls();}
 }
@@ -217,6 +270,11 @@ async function init(){
   $('trigger-fields').hidden=!$('trigger-enabled').checked;$('test-trigger').textContent=$('trigger-action').value||'Test reaction';
   $('chat-title').textContent=`Talk to ${form.elements.name.value}`;
   if(matchMedia('(max-width:650px)').matches){form.hidden=true;$('toggle-profile').textContent='Show details';$('toggle-profile').setAttribute('aria-expanded','false');}
+  let script;try{script=JSON.parse(localStorage.getItem('live-story-v1'));}catch(error){}
+  if(!script){script=await(await fetch('/api/story/example')).json();script.enabled=initial.name.toLowerCase()==='anna';}
+  storyEditor.load(Array.isArray(script.beats)?script.beats:[]);$('story-enabled').checked=!!script.enabled;
+  if(['manual','timed','director'].includes(script.mode))$('story-mode').value=script.mode;
+  $('story-settings').hidden=!$('story-enabled').checked;previewStory();
   await status();setInterval(status,5000);
 }
 window.addEventListener('beforeunload',()=>{if(stream)stream.getTracks().forEach(track=>track.stop());if(referenceURL)URL.revokeObjectURL(referenceURL);socket?.close();});

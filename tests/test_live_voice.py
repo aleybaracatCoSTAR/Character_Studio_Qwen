@@ -145,7 +145,7 @@ class FakeProviders:
     async def assess_trigger(self,character,trigger,history,latest,active):
         self.assessments.append({'history':[dict(x) for x in history],'latest':latest,'active':active})
         return self.decision
-    async def direct(self,character,history,latest,settings,voice,trigger=None,active=False,previous=None,stage_action=False):
+    async def direct(self,character,history,latest,settings,voice,trigger=None,active=False,previous=None,stage_action=False,narrative=None):
         return DirectorPlan(intention='Answer the current question and invite a practical choice.',
                             emotion=voice.emotion,delivery=voice.direction or 'Natural, conversational pace.',
                             trigger_action=self.decision.action,evidence=self.decision.evidence)

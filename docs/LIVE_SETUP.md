@@ -4,6 +4,8 @@ This experimental mode connects **English speech recognition → director → Qw
 
 **Status, 23 October 2026:** all three real Surrey services started and `/api/status` reported them ready. The first speaker-based microphone test repeatedly cancelled replies, exposing an overly eager VAD interruption path. The protected turn-taking and initial voice/trigger controls were deployed; the user reports literal-only trigger recognition and mostly flat vocal emotion. The older trigger-only contextual controller subsequently matched 11/12 small fictional cases; three voice comparisons were generated, with no established listening preference. A new [director orchestrator](DIRECTOR.md) now plans actor intentions and TTS performance together; its live quality and added latency remain unverified. Combined VRAM has not been measured. This is not native full-duplex speech generation. Recognition finalises each utterance after a pause.
 
+For the old demo's narrative pattern, open [Narrative beats](NARRATIVE.md). To use larger actor/director models across two or three allocated H200s, follow [Multi-GPU setup](MULTI_GPU.md). The commands below retain the compact one-GPU default.
+
 ## 1. Prepare on Surrey
 
 Use the terminal inside your allocated H200 job, in this repository. Stop earlier Qwen or Drama 3 servers with Ctrl+C before reusing the GPU. The launcher checks ports 18091–18093 and refuses to replace an existing server.

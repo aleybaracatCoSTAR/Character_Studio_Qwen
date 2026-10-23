@@ -17,16 +17,21 @@ from .turns import TurnDetector
 from .voice import Delivery, MAX_START_BYTES, VoiceSettings, VOICE_DIRECTORY
 from .reactions import EmotionalTrigger
 from .director import DirectorSettings
+from .narrative import NarrativeSettings, StoryControl
+from .deployment import profile
 
 
 def create_app(preview=False, providers=None, vad_factory=None):
+    deployment = profile()
     public = Path(__file__).resolve().parent.parent / "frontend"
     services = providers or LocalProviders(SpeechRecognition(os.environ.get("LIVE_STT_MODEL_DIR"),
                                                            os.environ.get("LIVE_STT_DEVICE", "cpu")),
                                           os.environ.get("LIVE_LLM_URL", "http://127.0.0.1:18092"),
                                           os.environ.get("LIVE_TTS_URL", "http://127.0.0.1:18093"),
                                           director_url=os.environ.get("LIVE_DIRECTOR_URL"),
-                                          director_model=os.environ.get("LIVE_DIRECTOR_MODEL", "live-character"))
+                                          director_model=os.environ.get("LIVE_DIRECTOR_MODEL", "live-character"),
+                                          llm_model=os.environ.get("LIVE_LLM_MODEL", "live-character"),
+                                          director_timeout=os.environ.get("LIVE_DIRECTOR_TIMEOUT",deployment["director_timeout"]))
     call_lock = asyncio.Lock()
 
     @asynccontextmanager
@@ -50,6 +55,11 @@ def create_app(preview=False, providers=None, vad_factory=None):
     @app.get("/api/example")
     def character(): return example().model_dump()
 
+    @app.get("/api/story/example")
+    def story_example():
+        path=Path(__file__).resolve().parent.parent/'characters/anna-story.json'
+        return NarrativeSettings.model_validate_json(path.read_text()).model_dump()
+
     @app.get("/api/voice/{preset}")
     def voice_preview(preset: str):
         from fastapi import HTTPException
@@ -61,6 +71,8 @@ def create_app(preview=False, providers=None, vad_factory=None):
         health = {"stt":False,"llm":False,"tts":False} if preview else await services.health()
         return {"preview":preview,"ready":all(health.values()),"services":health,
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
+                "profile":os.environ.get("LIVE_PROFILE","shared"),
+                "models":{"actor":deployment['actor']['id'],"director":(deployment['director'] or deployment['actor'])['id']},
                 "director":{"model":getattr(services,"director_model","live-character"),
                             "shared_model":getattr(services,"director_url",None)==getattr(services,"llm_url",None) and getattr(services,"director_model","live-character")=="live-character"}}
 
@@ -93,19 +105,21 @@ def create_app(preview=False, providers=None, vad_factory=None):
             voice = VoiceSettings.model_validate(config.get("voice", {}))
             trigger = EmotionalTrigger.model_validate(config["trigger"]) if config.get("trigger") is not None else None
             director = DirectorSettings.model_validate(config.get("director", {}))
+            narrative = NarrativeSettings.model_validate(config.get("narrative", {}))
             if vad_factory:
                 detector = vad_factory()
             else:
                 import webrtcvad
                 vad = webrtcvad.Vad(2)
                 detector = TurnDetector(lambda pcm:vad.is_speech(pcm,16000))
-            session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director)
+            session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director, narrative=narrative)
             listen_after = 0.0
             def clear_microphone():
                 detector.pending.clear(); detector.reset()
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
                              "endpoint_ms":480, "turn_taking":"Stop reply to interrupt; mic resumes after playback",
                              "voice":"uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated phrase anchors this call"})
+            await session.start_story()
             while True:
                 message = await socket.receive()
                 if message["type"] == "websocket.disconnect": break
@@ -152,6 +166,10 @@ def create_app(preview=False, providers=None, vad_factory=None):
                         session.voice = session.voice.model_copy(update=delivery.model_dump())
                     elif command.get("type") == "director":
                         session.director = DirectorSettings.model_validate(command.get("settings"))
+                        await send_json({"type":"director_ack","message":"Direction saved for the next reply."})
+                    elif command.get("type") == "story":
+                        control=StoryControl.model_validate(command.get("control"))
+                        await session.story_control(control.action)
                     elif command.get("type") == "trigger":
                         clear_microphone()
                         await session.fire_trigger()

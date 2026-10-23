@@ -1,0 +1,23 @@
+{
+  "shared": {
+    "gpus":1,
+    "actor":{"id":"Qwen/Qwen3-4B-Instruct-2507","revision":"cdbee75f17c01a7cc42f958dc650907174af0554","directory":"llm","slot":0,"memory":0.18},
+    "director":null,
+    "tts":{"slot":0,"main_memory":0.50,"codec_memory":0.07},
+    "director_timeout":6
+  },
+  "quality-2gpu": {
+    "gpus":2,
+    "actor":{"id":"Qwen/Qwen3-30B-A3B-Instruct-2507","revision":"0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe","directory":"actor-30b","slot":1,"memory":0.85},
+    "director":null,
+    "tts":{"slot":0,"main_memory":0.70,"codec_memory":0.10},
+    "director_timeout":12
+  },
+  "quality-3gpu": {
+    "gpus":3,
+    "actor":{"id":"Qwen/Qwen3-30B-A3B-Instruct-2507","revision":"0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe","directory":"actor-30b","slot":1,"memory":0.85},
+    "director":{"id":"Qwen/Qwen3-32B","revision":"9216db5781bf21249d130ec9da846c4624c16137","directory":"director-32b","slot":2,"memory":0.85},
+    "tts":{"slot":0,"main_memory":0.70,"codec_memory":0.10},
+    "director_timeout":12
+  }
+}

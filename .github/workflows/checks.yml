@@ -19,6 +19,6 @@ jobs:
       - run: python -m compileall -q studio live_voice scripts experiments/drama3 tests
       - run: node --check frontend/app.js && node --check frontend/recorder-worklet.js
       - run: node --input-type=module --check < frontend/live.js
-      - run: node --check frontend/live-capture-worklet.js
+      - run: node --check frontend/live-capture-worklet.js && node --check frontend/live-story.mjs
       - run: node --test tests/live_audio.test.mjs
       - run: for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done

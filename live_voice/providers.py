@@ -63,12 +63,14 @@ class SpeechRecognition:
 
 class LocalProviders:
     def __init__(self, stt, llm_url="http://127.0.0.1:18092", tts_url="http://127.0.0.1:18093", transport=None,
-                 director_url=None, director_model="live-character"):
+                 director_url=None, director_model="live-character", llm_model="live-character", director_timeout=6):
         self.stt = stt
         self.llm_url = llm_url.rstrip("/")
         self.tts_url = tts_url.rstrip("/")
         self.director_url = (director_url or self.llm_url).rstrip("/")
         self.director_model = director_model
+        self.llm_model = llm_model
+        self.director_timeout = max(2,min(60,float(director_timeout)))
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(120, connect=3), transport=transport)
 
     async def health(self):
@@ -76,12 +78,15 @@ class LocalProviders:
             try: return (await self.http.get(url + "/health", timeout=2)).is_success
             except httpx.HTTPError: return False
         llm, tts = await asyncio.gather(check(self.llm_url), check(self.tts_url))
-        return {"stt":self.stt.model is not None, "llm":llm, "tts":tts}
+        health={"stt":self.stt.model is not None, "llm":llm, "tts":tts}
+        if self.director_url != self.llm_url: health['director']=await check(self.director_url)
+        return health
 
     async def text(self, character, history):
         prompt = system_prompt(character) + "\n\nFor this voice call, reply in at most three short sentences. Use plain spoken words. Do not include bracketed delivery tags, markdown or stage directions."
-        payload = {"model":"live-character", "messages":[{"role":"system", "content":prompt}] + history,
-                   "stream":True, "max_tokens":120, "temperature":0.7}
+        payload = {"model":self.llm_model, "messages":[{"role":"system", "content":prompt}] + history,
+                   "stream":True, "max_tokens":160, "temperature":0.7,
+                   "chat_template_kwargs":{"enable_thinking":False}}
         async with self.http.stream("POST", self.llm_url + "/v1/chat/completions", json=payload) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -96,12 +101,13 @@ class LocalProviders:
                     if text: yield text
 
     async def direct(self, character, history, latest, settings, voice, trigger=None,
-                     active=False, previous=None, stage_action=False):
-        payload = {"model":self.director_model, "stream":False, "temperature":0.2, "max_tokens":300,
+                     active=False, previous=None, stage_action=False, narrative=None):
+        payload = {"model":self.director_model, "stream":False, "temperature":0.2, "max_tokens":420,
+                   "chat_template_kwargs":{"enable_thinking":False},
                    "response_format":{"type":"json_object"},
                    "messages":director_messages(character,history,latest,settings,voice,trigger,
-                                                active,previous,stage_action)}
-        response = await self.http.post(self.director_url + "/v1/chat/completions", json=payload, timeout=6)
+                                                active,previous,stage_action,narrative)}
+        response = await self.http.post(self.director_url + "/v1/chat/completions", json=payload, timeout=self.director_timeout)
         response.raise_for_status()
         return DirectorPlan.model_validate_json(response.json()["choices"][0]["message"]["content"])
 

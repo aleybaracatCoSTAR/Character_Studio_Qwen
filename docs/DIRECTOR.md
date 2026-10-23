@@ -1,6 +1,6 @@
 # Director orchestration
 
-The live rehearsal now has a backstage director, an actor and a voice performer. [UI preview](screenshots/director-preview.jpg).
+The live rehearsal now has a backstage director, a narrative beat controller, an actor and a voice performer. See [narrative controls](NARRATIVE.md) and [two-/three-GPU quality profiles](MULTI_GPU.md). [UI preview](screenshots/director-preview.jpg).
 
 The flow is:
 
@@ -16,7 +16,7 @@ flowchart LR
   H[Scene direction and emotional trigger] --> C
 ```
 
-The director sees the fixed character definition, current story moment, recent heard dialogue, newest utterance, base delivery, optional trigger and scene direction. It returns validated JSON with `intention`, `emotion`, `delivery`, `event`, `trigger_action` and `evidence`. It does not write the spoken reply. The actor receives the intention in its runtime scene context; the saved character is unchanged. The voice performer receives the actor's words with the selected performance cues. Notes never become a user message or heard dialogue history.
+The director sees the fixed character definition, current story moment, recent heard dialogue, newest utterance, base delivery, optional trigger and scene direction. It returns validated JSON with `intention`, `emotion`, `delivery`, `event`, `trigger_action`, `evidence`, `beat_done` and `beat_evidence`. It does not write the spoken reply. The actor receives the intention in its runtime scene context; the saved character is unchanged. The voice performer receives the actor's words with the selected performance cues. Notes never become a user message or heard dialogue history.
 
 Example intended behaviour: a participant reassures Anna that they will not reset her. A useful director intention is **accept their reassurance and ask them to choose a wash cycle**. A matching vocal direction is **relieved, softer, slightly hesitant**. These are illustrative directions, not claimed measured model outputs.
 
@@ -24,7 +24,7 @@ Example intended behaviour: a participant reassures Anna that they will not rese
 
 Pull the repository in the allocated GPU checkout, stop the previous stack with Ctrl+C, then run `bash scripts/run_live_stack.sh`. No new Python dependency or checkpoint is required for the default configuration. Refresh http://127.0.0.1:18091/ through the existing Mac tunnel.
 
-Open **Director**, enable **Guide each reply**, and enter a short scene direction. Both can be changed during a call; the next turn uses them. **Latest director note** above the transcript shows the applied intention, vocal cue and evidence. The timing line includes director latency.
+Open **Director script**, enable **Guide each reply**, and enter a short scene direction. Both can be changed during a call; the next turn uses them. **Latest director note** above the transcript shows the applied intention, vocal cue and evidence. The timing line includes director latency.
 
 Open **How they speak → Voice** to choose Automatic, Female, Male or Custom reference. Female/Male use bundled British VCTK audio, not an unsupported Drama 3 preset name. Preview plays the source recording. Custom requires a 2–15 second PCM16 WAV plus its exact transcript. End the call before changing the voice reference. [Attribution](../assets/voices/NOTICE.md).
 
@@ -47,12 +47,12 @@ These settings route requests only. They do not download, start, allocate GPU me
 ## Runtime limits and failures
 
 - Director output must match `DirectorPlan`; malformed JSON, unknown emotions and extra keys are rejected.
-- The HTTP request has a six-second timeout and a 6.5-second outer deadline. It adds a sequential planning step before first actor tokens. Measure the latency; it is not free.
+- The compact profile uses a six-second HTTP timeout and 6.5-second outer deadline; quality profiles use 12/12.5 seconds. `LIVE_DIRECTOR_TIMEOUT` can override it. It adds a sequential planning step before first actor tokens. Measure the latency; it is not free.
 - On failure the page reports it, keeps the current trigger state and continues with the actor. It does not substitute keyword matching.
 - Active trigger emotion and vocal direction override the general director suggestion; the displayed note shows the delivery actually applied to TTS. Manual stage actions remain authoritative.
 - Disabling the director restores the existing trigger-only assessment when a trigger is configured.
 - Stop reply cancels a pending director request as well as actor and TTS work. Conversation history contains only acknowledged, fully played phrases.
-- No automatic timed story-beat advance, branching show graph, fine-tuning, persistent memory store, multi-character call routing or physical prop input is included in this iteration.
+- Timed/evidence-based linear story beats and performer controls are now included; see [NARRATIVE.md](NARRATIVE.md). Branching show graphs, fine-tuning, persistent memory stores, multi-character call routing and physical prop input remain outside this iteration.
 
 ## Important files
 
