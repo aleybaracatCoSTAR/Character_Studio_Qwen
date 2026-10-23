@@ -76,7 +76,7 @@ node --test tests/live_audio.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-59 Python tests and eight JavaScript audio tests exercise app contracts, protected turn-taking, streamed provider responses, cancellation, playback acknowledgements, bounded voice references, delivery tags and emotional triggers. They use explicit test doubles for inference and do not demonstrate model quality or real GPU speed.
+62 Python tests and eight JavaScript audio tests exercise app contracts, protected turn-taking, streamed provider responses, cancellation, playback acknowledgements, bounded voice references, delivery tags, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

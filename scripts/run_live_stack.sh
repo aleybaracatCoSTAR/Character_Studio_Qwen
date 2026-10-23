@@ -43,8 +43,17 @@ fi
 mkdir -p "$LIVE_VOICE_STORE/logs"
 tts_pid=''; llm_pid=''
 cleanup(){
-  [[ -z "$tts_pid" ]] || kill -TERM "$tts_pid" 2>/dev/null || true
-  [[ -z "$llm_pid" ]] || kill -TERM "$llm_pid" 2>/dev/null || true
+  trap - EXIT
+  trap '' INT TERM
+  local groups=()
+  [[ -z "$tts_pid" ]] || groups+=("$tts_pid")
+  [[ -z "$llm_pid" ]] || groups+=("$llm_pid")
+  if ((${#groups[@]})); then
+    echo "Stopping this launch's inference servers and waiting for their workers to exit…"
+    .venv-live/bin/python scripts/live_process.py stop "${groups[@]}" || true
+    [[ -z "$tts_pid" ]] || wait "$tts_pid" 2>/dev/null || true
+    [[ -z "$llm_pid" ]] || wait "$llm_pid" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -68,10 +77,10 @@ wait_health(){
   echo "$label did not become healthy. Read its log." >&2; return 1
 }
 echo "Starting Drama 3. Log: $LIVE_VOICE_STORE/logs/tts.log"
-bash scripts/run_live_tts.sh >"$LIVE_VOICE_STORE/logs/tts.log" 2>&1 & tts_pid=$!
+.venv-live/bin/python scripts/live_process.py start bash scripts/run_live_tts.sh >"$LIVE_VOICE_STORE/logs/tts.log" 2>&1 & tts_pid=$!
 wait_health 18093 "$tts_pid" tts
 echo "Starting the text model. Log: $LIVE_VOICE_STORE/logs/llm.log"
-bash scripts/run_live_llm.sh >"$LIVE_VOICE_STORE/logs/llm.log" 2>&1 & llm_pid=$!
+.venv-live/bin/python scripts/live_process.py start bash scripts/run_live_llm.sh >"$LIVE_VOICE_STORE/logs/llm.log" 2>&1 & llm_pid=$!
 wait_health 18092 "$llm_pid" llm
 echo 'Starting the live interface on http://127.0.0.1:18091/'
 echo 'Ctrl+C stops the services started by this script; the Slurm allocation is separate.'

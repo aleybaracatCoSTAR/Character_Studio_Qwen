@@ -103,7 +103,9 @@ Record errors, time to first audible reply, pauses between phrases, whether inte
 
 ## 7. Finish
 
-End the call, then press Ctrl+C in the launch terminal. The script terminates only the model servers it started. This does **not** release the Slurm allocation. When finished with the GPU, inspect `squeue -u "$USER"` and cancel your actual current job ID with `scancel`.
+End the call, then press Ctrl+C in the launch terminal. The script starts each inference server in its own process group and terminates only those groups. Allow up to 20 seconds for graceful shutdown; remaining workers in those groups are then stopped. Wait for the terminal prompt before relaunching. This does **not** release the Slurm allocation. When finished with the GPU, inspect `squeue -u "$USER"` and cancel your actual current job ID with `scancel`.
+
+If a server from an older launcher still holds a port, inspect it in the allocated GPU terminal with `ss -ltnp '( sport = :18092 or sport = :18093 )'`. Identify its owning process before sending a stop signal. The launcher refuses to replace a server occupying its ports and does not automatically kill processes discovered there.
 
 ## Files and protocol
 
