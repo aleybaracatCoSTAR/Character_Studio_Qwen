@@ -26,15 +26,16 @@ The setup uses vLLM **0.32.0** with the pinned vLLM-Omni 0.32 development revisi
 
 ### Repair an earlier installation
 
-If you see `cannot import name 'async_request_profile'`, an Omni/vLLM version mismatch, or **PyTorch CUDA 13.2 vs TorchAudio CUDA 13.0**, pull the latest repository and run the updated setup again. This replaces the mismatched packages and keeps your existing model files:
+For **Torch/TorchVision `+cu132` with TorchAudio `+cu130`**, pull the latest repository and run the focused CUDA repair. It uses exact official wheel URLs and SHA-256 hashes from `requirements-cu130.txt`, rather than choosing the build from an index. It targets the existing Surrey Linux x86_64 Python 3.12 environment and keeps model downloads:
 
 ```bash
 GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull --ff-only
-bash experiments/drama3/setup.sh
-.venv-drama3/bin/python experiments/drama3/check_install.py
+bash experiments/drama3/repair_cuda.sh
 ```
 
-The driver reporting CUDA 13.2 does not require CUDA 13.2 Python wheels. Do not use `--torch-backend=auto` for this environment: it can select a newer Torch build than the audio extension. The preflight requires all three package versions to end in `+cu130` and imports the actual serving CLI. The corrected runtime dependency range is in [Omni's pinned requirements](https://github.com/vllm-project/vllm-omni/blob/798fef99a33fba3ad3c2439d6ec10fe838c0076b/requirements/common.txt); the missing function is in [vLLM 0.32.0](https://github.com/vllm-project/vllm/blob/v0.32.0/vllm/benchmarks/lib/endpoint_request_func.py). A failed GPU server never opens port 18093, so a Mac health-check failure is expected until this is repaired.
+Wait for **Serving imports OK** before running `bash experiments/drama3/run.sh`. The repair replaces Torch, Audio and Vision and lets the resolver install their required runtime libraries. It does not reinstall the two serving packages or fetch model weights. The full setup also uses these direct wheel pins. An earlier successful setup that still shows `cu132` does not establish how those packages were installed; preserve its output if this recurs.
+
+If you instead see `cannot import name 'async_request_profile'` or a vLLM/Omni version mismatch, use `bash experiments/drama3/setup.sh` to install the serving pair as well. The driver reporting CUDA 13.2 does not require CUDA 13.2 Python wheels. Do not use `--torch-backend=auto` for this environment. The preflight requires all three package versions to end in `+cu130` and imports the actual serving CLI. The corrected runtime dependency range is in [Omni's pinned requirements](https://github.com/vllm-project/vllm-omni/blob/798fef99a33fba3ad3c2439d6ec10fe838c0076b/requirements/common.txt); the missing function is in [vLLM 0.32.0](https://github.com/vllm-project/vllm/blob/v0.32.0/vllm/benchmarks/lib/endpoint_request_func.py). A failed GPU server never opens port 18093, so a Mac health-check failure is expected until this is repaired.
 
 ## 2. Download and launch
 

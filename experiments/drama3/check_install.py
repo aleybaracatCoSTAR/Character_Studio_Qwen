@@ -12,7 +12,7 @@ def main():
     installed = {name: version(name) for name in expected}
     print("; ".join(f"{name} {value}" for name, value in installed.items()), flush=True)
     if installed != expected:
-        raise SystemExit("CUDA wheel versions do not match the supported cu130 combination. Run bash experiments/drama3/setup.sh; existing model downloads are kept.")
+        raise SystemExit("CUDA wheel versions do not match the supported cu130 combination. Run bash experiments/drama3/repair_cuda.sh to replace them with exact official wheels; existing model downloads are kept.")
     try:
         import torch
         import torchaudio
