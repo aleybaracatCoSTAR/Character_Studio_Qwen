@@ -3,7 +3,7 @@ import logging
 import struct
 import time
 
-from .providers import synthetic_reference
+from .providers import OUTPUT_RATE, synthetic_reference
 from .director import DirectorSettings
 from .narrative import NarrativeState
 from .voice import EMOTION_DIRECTIONS
@@ -286,6 +286,8 @@ class LiveSession:
                     await self.send_json({"type":"phrase_start", "turn_id":turn_id, "seq":sequence, "text":phrase})
                     tts_started = time.perf_counter()
                     reference_audio = bytearray()
+                    audio_bytes = 0
+                    audio_chunks = 0
                     speech = spoken_input(phrase, delivery, first_phrase=sequence == 0)
                     async for chunk in self.providers.audio(speech, self.reference):
                         if "tts_first_chunk_ms" not in metrics:
@@ -293,11 +295,15 @@ class LiveSession:
                             metrics["speech_end_to_first_audio_ms"] = round((time.perf_counter() - started) * 1000)
                             await self.send_json({"type":"metrics", "turn_id":turn_id, **metrics})
                         if self.reference is None: reference_audio.extend(chunk)
+                        audio_bytes += len(chunk)
+                        audio_chunks += 1
                         await self.send_bytes(struct.pack("!II", turn_id, sequence) + chunk)
                     # Use the first generated phrase as the synthetic voice reference for this call.
                     if self.reference is None and reference_audio:
                         self.reference = synthetic_reference(bytes(reference_audio), phrase)
-                    await self.send_json({"type":"phrase_done", "turn_id":turn_id, "seq":sequence})
+                    await self.send_json({"type":"phrase_done", "turn_id":turn_id, "seq":sequence,
+                        "audio_seconds":round(audio_bytes / (2 * OUTPUT_RATE), 3), "audio_chunks":audio_chunks,
+                        "generation_ms":round((time.perf_counter() - tts_started) * 1000)})
                     sequence += 1
 
             tasks = [asyncio.create_task(produce()), asyncio.create_task(consume())]

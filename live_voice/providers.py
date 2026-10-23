@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import json
 from pathlib import Path
+import re
 import threading
 import wave
 
@@ -15,6 +16,18 @@ from .reactions import TriggerDecision, assessment_messages
 from .director import DirectorPlan, director_messages
 
 OUTPUT_RATE = 44100
+
+
+def speech_token_budget(text):
+    """Allow unhurried speech to finish; delivery tags are not spoken words.
+
+    The former 13 tokens/word with a 400-token ceiling was a hard stop, not a
+    speed control. Keep a bounded ceiling, with headroom for pauses and long
+    words. Drama 3 can still end naturally before this maximum.
+    """
+    spoken = re.sub(r"\[[^\]]*\]", " ", text)
+    spoken = " ".join(spoken.split())
+    return max(240, min(1600, max(len(spoken.split()) * 28, len(spoken) * 4) + 96))
 
 
 def pcm_wav(pcm):
@@ -126,7 +139,7 @@ class LocalProviders:
     async def audio(self, text, reference=None):
         payload = {"model":"fishaudio/drama-3", "input":text, "voice":"default", "stream":True,
                    "stream_format":"audio", "response_format":"pcm",
-                   "max_new_tokens":max(100, min(400, len(text.split()) * 13 + 32))}
+                   "max_new_tokens":speech_token_budget(text)}
         if reference:
             payload["ref_audio"], payload["ref_text"] = reference
         async with self.http.stream("POST", self.tts_url + "/v1/audio/speech", json=payload) as response:

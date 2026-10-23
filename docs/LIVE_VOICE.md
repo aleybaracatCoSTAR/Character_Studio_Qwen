@@ -21,4 +21,10 @@ The microphone waits during generation and playback; **Stop reply** cancels unfi
 
 The app reports server-side timing stages, not a promise of a particular response time. **CPU tests verify transport and cancellation, not model inference or H200 memory use.** The combined one-H200 memory configuration is experimental. First-run kernel compilation must be separated from warmed turn measurements.
 
+### Playback continuity
+
+The browser builds a 120 ms PCM reserve before playback or recovery from an underrun, then coalesces small packets into at least 60 ms batches. Every short final tail is flushed when its phrase completes. The original 44.1 kHz sample rate is preserved; buffering does not accelerate, time-stretch or discard speech. Phrase acknowledgements and microphone release wait for buffered samples and scheduled audio to finish. This absorbs small variations in packet arrival, but cannot remove a long model-generation pause or reconstruct words that TTS did not generate.
+
+The previous TTS budget was 13 tokens per input word, capped at 400. That hard generation limit could cut off a slower delivery. The live provider now allows a bounded 240–1600 tokens based on spoken words and characters, excluding performance tags. This changes maximum generation length, not speaking speed. Drama 3 may finish before the limit; a take that continues emitting silence may instead last longer. Each `phrase_done` message includes generated audio seconds, chunk count and generation time to help separate synthesis from playback delays. These changes have regression coverage; a Surrey listening comparison is still required.
+
 Drama 3 remains a [TTS model](https://huggingface.co/fishaudio/drama-3), with its own model license. Its standalone [three-line voice experiment](../experiments/drama3/README.md) remains useful for comparing delivery without involving recognition or character reasoning.

@@ -23,24 +23,38 @@ export function unpackAudio(buffer){
 }
 
 export class PCMPlayback {
-  constructor(context,send,onSpeaking,onIdle){this.context=context;this.send=send;this.onSpeaking=onSpeaking;this.onIdle=onIdle;this.sources=new Set();this.turn=0;this.phrases=new Map();this.nextAck=0;this.nextTime=0;this.finished=false;}
+  constructor(context,send,onSpeaking,onIdle){this.context=context;this.send=send;this.onSpeaking=onSpeaking;this.onIdle=onIdle;this.sources=new Set();this.turn=0;this.phrases=new Map();this.nextAck=0;this.nextTime=0;this.finished=false;this.rate=44100;this.prebufferSamples=Math.ceil(this.rate*.12);this.batchSamples=Math.ceil(this.rate*.06);}
   setTurn(turn){this.clear();this.turn=turn;}
-  record(sequence){if(!this.phrases.has(sequence))this.phrases.set(sequence,{pending:0,done:false,acked:false});return this.phrases.get(sequence);}
+  record(sequence){if(!this.phrases.has(sequence))this.phrases.set(sequence,{pending:0,done:false,acked:false,buffers:[],samples:0});return this.phrases.get(sequence);}
   push(buffer){
     const packet=unpackAudio(buffer);if(packet.turn!==this.turn)return;
-    const record=this.record(packet.sequence),audio=this.context.createBuffer(1,packet.samples.length,44100);
-    audio.copyToChannel(packet.samples,0);
+    const record=this.record(packet.sequence);record.buffers.push(packet.samples);record.samples+=packet.samples.length;
+    this.flush(packet.sequence);
+  }
+  flush(sequence,force=false){
+    const record=this.record(sequence);
+    // Build a small reserve before starting or recovering from an underrun. Tiny
+    // network packets should not each become a source with a new 25 ms lead-in.
+    const threshold=this.nextTime-this.context.currentTime>.025?this.batchSamples:this.prebufferSamples;
+    if(!record.samples||(!force&&record.samples<threshold))return;
+    const samples=new Float32Array(record.samples);let offset=0;
+    for(const part of record.buffers){samples.set(part,offset);offset+=part.length;}
+    record.buffers=[];record.samples=0;
+    // Keep the model's native sample rate: buffering must not change voice speed
+    // or pitch, and every final PCM sample must reach the audio device.
+    const audio=this.context.createBuffer(1,samples.length,this.rate);
+    audio.copyToChannel(samples,0);
     const source=this.context.createBufferSource();source.buffer=audio;source.connect(this.context.destination);
     const holder={source,cancelled:false};this.sources.add(holder);record.pending++;
     source.onended=()=>{this.sources.delete(holder);if(holder.cancelled)return;record.pending--;this.acknowledge();};
     const when=Math.max(this.context.currentTime+.025,this.nextTime);this.nextTime=when+audio.duration;
     source.start(when);this.onSpeaking();
   }
-  phraseDone(sequence){this.record(sequence).done=true;this.acknowledge();}
+  phraseDone(sequence){this.record(sequence).done=true;this.flush(sequence,true);this.acknowledge();}
   responseDone(){this.finished=true;this.acknowledge();}
   acknowledge(){
     while(this.phrases.has(this.nextAck)){
-      const record=this.phrases.get(this.nextAck);if(!record.done||record.pending||record.acked)break;
+      const record=this.phrases.get(this.nextAck);if(!record.done||record.pending||record.samples||record.acked)break;
       record.acked=true;this.send({type:'played',turn_id:this.turn,seq:this.nextAck});this.nextAck++;
     }
     if(this.finished&&!this.sources.size&&[...this.phrases.values()].every(p=>p.acked)){

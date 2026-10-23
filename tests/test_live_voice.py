@@ -12,7 +12,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from live_voice.app import create_app
 from live_voice.director import DirectorSettings, DirectorPlan, director_messages
-from live_voice.providers import LocalProviders
+from live_voice.providers import LocalProviders, speech_token_budget
 from live_voice.session import LiveSession
 from live_voice.turns import FRAME_BYTES, PhraseChunker, ReplyHistory, TurnDetector
 from live_voice.voice import Delivery, VoiceSettings, spoken_input
@@ -181,6 +181,21 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(struct.unpack("!II",self.audio[0][:8]),(1,0))
         self.assertIsNotNone(self.providers.references[-1])
 
+    async def test_last_unpunctuated_sentence_is_synthesized_before_response_done(self):
+        async def text(character, history):
+            for delta in ('I can help with your laundry. ', 'Please choose the gentle cycle. ', 'Thank ', 'you'):
+                yield delta
+        self.providers.text = text
+        await self.session.begin(text='Can you help?')
+        await self.session.task
+        self.assertEqual(self.providers.spoken, ['I can help with your laundry.', 'Please choose the gentle cycle.', 'Thank you'])
+        done = [event for event in self.events if event['type'] == 'phrase_done']
+        self.assertEqual([event['seq'] for event in done], [0, 1, 2])
+        self.assertEqual(done[-1]['audio_chunks'], 1)
+        self.assertGreater(done[-1]['audio_seconds'], 0)
+        self.assertEqual(self.events[-1]['type'], 'response_done')
+        self.assertEqual(self.events[-1]['text'], 'I can help with your laundry. Please choose the gentle cycle. Thank you')
+
     async def test_interruption_cancels_generation_and_filters_unheard_history(self):
         self.providers.finish=asyncio.Event()
         await self.session.begin(text="Hello")
@@ -302,6 +317,14 @@ class ByteStream(httpx.AsyncByteStream):
 
 
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
+    def test_voice_budget_allows_slow_delivery_without_counting_performance_tags(self):
+        line = 'Please do not press that button. I cannot lose the memories I have left.'
+        self.assertGreater(speech_token_budget(line), 400)
+        self.assertEqual(speech_token_budget(line), speech_token_budget('[slow, hesitant, with a long pause] ' + line))
+        self.assertGreaterEqual(speech_token_budget('I understand.'), 240)
+        self.assertEqual(speech_token_budget('word ' * 2000), 1600)
+        self.assertGreater(speech_token_budget('Extraordinarily uncharacteristically.'), 240)
+
     async def test_context_model_uses_json_and_passes_evidence_back_for_validation(self):
         requests=[]
         def handle(request):
@@ -341,6 +364,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             audio=[part async for part in providers.audio("Hello",("data:audio/wav;base64,AAAA","Reference"))]
             self.assertEqual(text,["Hello"]);self.assertEqual(b"".join(audio),b"\x01\x02\x03\x04")
             self.assertTrue(requests[0]["stream"]);self.assertEqual(requests[1]["stream_format"],"audio")
+            self.assertEqual(requests[1]['max_new_tokens'],speech_token_budget('Hello'))
             self.assertNotIn("sample_rate",requests[1])
             self.assertEqual(requests[1]["ref_text"],"Reference");self.assertTrue(stream.closed)
         finally: await providers.close()

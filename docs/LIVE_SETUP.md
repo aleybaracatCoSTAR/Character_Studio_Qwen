@@ -79,7 +79,7 @@ Replace `costar07` if your allocation uses another node. Leave the tunnel open a
 
 Headphones help prevent output returning through the microphone. The server discards microphone frames throughout recognition/generation/playback and the echo tail, rather than buffering them as another turn. The endpoint uses 480 ms of silence; each utterance is capped at 15 seconds. Transcripts are produced after each detected utterance, not word by word.
 
-Short text clauses go to Drama 3 before the full answer finishes. Raw audio chunks are scheduled immediately in Web Audio. Without an uploaded reference, each call's first generated phrase becomes a synthetic voice reference for later phrases. This does not guarantee voice consistency and does not clone the participant's microphone input.
+Short text clauses go to Drama 3 before the full answer finishes. Web Audio builds a small 120 ms reserve and combines tiny packets into 60 ms batches; the final short tail is always flushed. This absorbs uneven packet arrival while preserving the native sample rate and every PCM sample. See [playback continuity](LIVE_VOICE.md#playback-continuity) for the synthesis budget and remaining limits. Without an uploaded reference, each call's first generated phrase becomes a synthetic voice reference for later phrases. This does not guarantee voice consistency and does not clone the participant's microphone input.
 
 ### Director
 
