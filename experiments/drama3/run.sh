@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+export PATH="$PWD/.venv-drama3/bin:$HOME/.local/bin:$PATH"
+export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 export DRAMA3_STORE="${DRAMA3_STORE:-/scratch4weeks/$USER/drama3-test-store}"
 export HF_HOME="$DRAMA3_STORE/huggingface"
 export HF_HUB_DISABLE_IMPLICIT_TOKEN=1

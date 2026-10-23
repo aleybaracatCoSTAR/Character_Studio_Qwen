@@ -24,6 +24,7 @@ Update, 22 October 2026: the user launched the baseline on Surrey and reports th
 - `live_voice/session.py`: bounded two-phrase queue, cancellation, timing and playback-confirmed history. The browser discards stale turn IDs. Partial phrases are omitted after interruption.
 - `frontend/live.js`, `live-audio.mjs`, `live-capture-worklet.js`: continuous capture, resampling, Web Audio scheduling, mute, interruption and typed tests.
 - `scripts/run_live_stack.sh`: starts only its own TTS/text subprocesses, waits for health, runs the UI and cleans up on exit. Does not release the Slurm job.
+- `scripts/run_live_stack.sh --prepare` installs the separate live app environment and resumes the pinned STT/text downloads, then launches. Existing Drama 3 dependencies and weights are reused. Launchers default to native GPU sampling (`VLLM_USE_FLASHINFER_SAMPLER=0`) to carry forward the first Surrey sampler workaround. Explicit overrides are preserved.
 - No incremental word transcript, model-level simultaneous speech, performer cue API or mid-call character mutation is implemented.
 
 Pinned text model: `Qwen/Qwen3-4B-Instruct-2507` at `cdbee75f17c01a7cc42f958dc650907174af0554`. STT: `Systran/faster-whisper-base.en` at `3d3d5dee26484f91867d81cb899cfcf72b96be6c`. See `scripts/download_live_models.py`. Drama 3 pins remain in its experiment scripts. GPU serving uses vLLM 0.32.0 + Omni `798fef99a33fba3ad3c2439d6ec10fe838c0076b`, Torch 2.13.0+cu130, Audio 2.11.0+cu130 and Vision 0.28.0+cu130. Do not replace the explicit backend with `auto`.

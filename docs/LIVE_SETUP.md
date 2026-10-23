@@ -11,19 +11,15 @@ Use the terminal inside your allocated H200 job, in this repository. Stop earlie
 ```bash
 cd /scratch4weeks/$USER/Character_Studio_Qwen
 GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull --ff-only
-bash experiments/drama3/setup.sh
-bash scripts/setup_live.sh
 ```
 
-Drama 3 uses its own `.venv-drama3` GPU environment. The live app and CPU speech recognition use `.venv-live`, keeping their dependencies separate. Setup pins vLLM 0.32.0 and the Omni revision, with **CUDA 13.0 Torch/Audio/Vision wheels**. It checks serving imports before launching a model. Your driver may report CUDA 13.2; that does not require CUDA 13.2 Python wheels. Existing model downloads are kept.
+The launcher reuses the working Drama 3 `.venv-drama3` GPU environment and model download. The live app and CPU speech recognition use `.venv-live`, keeping their dependencies separate. For a fresh installation, first complete [Drama 3 setup and its voice test](../experiments/drama3/README.md). That setup pins vLLM 0.32.0 and the Omni revision, with **CUDA 13.0 Torch/Audio/Vision wheels**. Your driver may report CUDA 13.2; that does not require CUDA 13.2 Python wheels.
 
 ## 2. Download the additional listening and text models
 
-```bash
-.venv-live/bin/python scripts/download_live_models.py
-```
+The `--prepare` launch command below installs the live app environment, then fetches a roughly 8 GB small text checkpoint and a small English Faster-Whisper checkpoint into `/scratch4weeks/$USER/live-voice-store`. The download resumes existing files. This mode uses Qwen3-4B for dialogue; the original Qwen-Omni 30B checkpoint remains a separate experiment.
 
-This explicitly downloads a roughly 8 GB small text checkpoint and a small English Faster-Whisper checkpoint into `/scratch4weeks/$USER/live-voice-store`. It does not load the original Qwen-Omni 30B checkpoint.
+For separate manual preparation, use `bash scripts/setup_live.sh` followed by `.venv-live/bin/python scripts/download_live_models.py`.
 
 If Drama 3 has not been downloaded already, also run:
 
@@ -36,10 +32,12 @@ Drama 3 remains in `/scratch4weeks/$USER/drama3-test-store`. Review its [Fish Au
 ## 3. Launch all services
 
 ```bash
-bash scripts/run_live_stack.sh
+bash scripts/run_live_stack.sh --prepare
 ```
 
-Keep this terminal open. The script starts Drama 3, waits for it, starts the small text model, then opens the live application. First startup and synthesis can compile kernels. The page reports whether all three services are ready.
+Keep this terminal open. After preparation, the script starts Drama 3, waits for it, starts the small text model, then opens the live application. It reports progress while models load and shows the end of the relevant log if a service fails. Subsequent launches can use `bash scripts/run_live_stack.sh` to reuse the prepared files directly. The page reports whether all three services are ready.
+
+Both model launchers default to `VLLM_USE_FLASHINFER_SAMPLER=0`, using vLLM's native GPU sampler. This carries forward the workaround for the missing-`ninja` FlashInfer sampler crash found in the first Surrey test. It affects token sampling, not whether the model runs on the GPU. You can explicitly override this after preparing a working FlashInfer kernel/toolchain configuration.
 
 | Port | Service | Log |
 |---|---|---|
