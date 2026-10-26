@@ -12,7 +12,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from live_voice.app import create_app
 from live_voice.director import DirectorSettings, DirectorPlan, director_messages
-from live_voice.providers import LocalProviders, speech_token_budget
+from live_voice.providers import LocalProviders, VoiceTakeIncomplete, speech_token_budget
 from live_voice.session import LiveSession
 from live_voice.turns import FRAME_BYTES, PhraseChunker, ReplyHistory, TurnDetector
 from live_voice.voice import Delivery, VoiceSettings, EMOTION_DIRECTIONS, spoken_input
@@ -168,22 +168,31 @@ class FakeProviders:
 
 class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.providers=FakeProviders();self.events=[];self.audio=[];self.audio_seen=asyncio.Event()
-        async def send_json(event): self.events.append(event)
+        self.providers=FakeProviders();self.events=[];self.audio=[];self.audio_seen=asyncio.Event();self.text_seen=asyncio.Event()
+        async def send_json(event):
+            self.events.append(event)
+            if event['type']=='text_delta':self.text_seen.set()
         async def send_bytes(packet): self.audio.append(packet);self.audio_seen.set()
         self.session=LiveSession(self.providers,example(),send_json,send_bytes,director=DirectorSettings(enabled=False))
 
     async def asyncTearDown(self): await self.session.close()
 
-    async def test_audio_arrives_before_llm_finishes(self):
+    async def test_text_streams_while_one_complete_voice_take_waits_for_all_actor_text(self):
         self.providers.finish=asyncio.Event()
         await self.session.begin(text="Hello")
-        await asyncio.wait_for(self.audio_seen.wait(),1)
+        await asyncio.wait_for(self.text_seen.wait(),1)
+        self.assertEqual([event['text'] for event in self.events if event['type']=='text_delta'],
+                         ['I am Anna, the washing machine. '])
+        self.assertEqual(self.audio,[]);self.assertEqual(self.providers.spoken,[])
+        self.assertEqual(self.providers.references,[]);self.assertIsNone(self.session.reference)
+        self.assertFalse(any(event['type'] in ('phrase_start','phrase_done') for event in self.events))
         self.assertFalse(any(x["type"]=="response_done" for x in self.events))
         self.providers.finish.set();await self.session.task
         self.assertTrue(any(x["type"]=="response_done" for x in self.events))
+        self.assertEqual(self.providers.spoken,['I am Anna, the washing machine. I would like someone to ask for help.'])
+        self.assertEqual(self.providers.references,[None])
         self.assertEqual(struct.unpack("!II",self.audio[0][:8]),(1,0))
-        self.assertIsNotNone(self.providers.references[-1])
+        self.assertIsNotNone(self.session.reference)
 
     async def test_last_unpunctuated_sentence_is_synthesized_before_response_done(self):
         async def text(character, history):
@@ -192,9 +201,12 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.providers.text = text
         await self.session.begin(text='Can you help?')
         await self.session.task
-        self.assertEqual(self.providers.spoken, ['I can help with your laundry.', 'Please choose the gentle cycle.', 'Thank you'])
+        expected='I can help with your laundry. Please choose the gentle cycle. Thank you'
+        self.assertEqual(self.providers.spoken, [expected])
+        starts=[event for event in self.events if event['type']=='phrase_start']
+        self.assertEqual([(event['seq'],event['text']) for event in starts],[(0,expected)])
         done = [event for event in self.events if event['type'] == 'phrase_done']
-        self.assertEqual([event['seq'] for event in done], [0, 1, 2])
+        self.assertEqual([event['seq'] for event in done], [0])
         self.assertEqual(done[-1]['audio_chunks'], 1)
         self.assertGreater(done[-1]['audio_seconds'], 0)
         self.assertEqual(self.events[-1]['type'], 'response_done')
@@ -203,7 +215,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_interruption_cancels_generation_and_filters_unheard_history(self):
         self.providers.finish=asyncio.Event()
         await self.session.begin(text="Hello")
-        await asyncio.wait_for(self.audio_seen.wait(),1)
+        await asyncio.wait_for(self.text_seen.wait(),1)
         await self.session.interrupt()
         self.assertTrue(self.providers.cancelled)
         self.assertIsNone(self.session.task)
@@ -211,6 +223,18 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.events[-1]["type"],"interrupted")
         count=len(self.audio);await asyncio.sleep(0)
         self.assertEqual(len(self.audio),count)
+        self.assertEqual(self.providers.spoken,[]);self.assertEqual(self.providers.references,[])
+
+    async def test_interrupted_playback_does_not_remember_a_partial_whole_reply(self):
+        await self.session.begin(text='Hello');await self.session.task
+        self.assertTrue(self.audio)
+        self.assertEqual(list(self.session.history.phrases),[0])
+        self.assertEqual(self.session.history.messages[-1]['content'],'')
+        await self.session.interrupt()
+        self.assertEqual(self.events[-1]['type'],'interrupted')
+        self.assertEqual(self.events[-1]['heard'],'')
+        self.assertEqual(self.session.history.messages[-1]['content'],'')
+        self.assertFalse(self.session.history.acknowledge(1,0))
 
     async def test_empty_transcript_does_not_trigger_a_reply(self):
         async def empty(pcm): return ""
@@ -227,8 +251,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.session.reply_pending)
         self.assertFalse(self.session.playback_done(1))
         self.assertTrue(self.session.history.acknowledge(1,0))
-        self.assertFalse(self.session.playback_done(1))
-        self.assertTrue(self.session.history.acknowledge(1,1))
+        self.assertFalse(self.session.history.acknowledge(1,1))
         self.assertFalse(self.session.playback_done(0))
         self.assertTrue(self.session.playback_done(1))
         self.assertFalse(self.session.reply_pending)
@@ -239,12 +262,34 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_playback_cannot_finish_while_more_text_is_being_generated(self):
         self.providers.finish=asyncio.Event()
         await self.session.begin(text="Hello")
-        await asyncio.wait_for(self.audio_seen.wait(),1)
-        self.session.history.acknowledge(1,0)
+        await asyncio.wait_for(self.text_seen.wait(),1)
+        self.assertFalse(self.session.history.acknowledge(1,0))
         self.assertFalse(self.session.playback_done(1))
         self.assertTrue(self.session.reply_pending)
         self.providers.finish.set()
         await self.session.task
+
+    async def test_whole_reply_waits_for_its_final_pcm_packet_and_playback_acknowledgement(self):
+        finish_audio=asyncio.Event()
+        async def audio(text,reference=None,on_notice=None):
+            yield b'\x01\x00'*100
+            await finish_audio.wait()
+            yield b'\x02\x00'
+        self.providers.audio=audio
+        await self.session.begin(text='Hello')
+        await asyncio.wait_for(self.audio_seen.wait(),1)
+        self.assertFalse(self.session.generation_complete)
+        self.assertFalse(self.session.playback_done(1))
+        self.assertFalse(any(event['type']=='phrase_done' for event in self.events))
+        self.assertEqual(self.session.history.messages[-1]['content'],'')
+        finish_audio.set();await self.session.task
+        self.assertEqual([struct.unpack('!II',packet[:8]) for packet in self.audio],[(1,0),(1,0)])
+        self.assertEqual(b''.join(packet[8:] for packet in self.audio),b'\x01\x00'*100+b'\x02\x00')
+        self.assertEqual(next(event for event in self.events if event['type']=='phrase_done')['audio_chunks'],2)
+        self.assertFalse(self.session.playback_done(1))
+        self.assertTrue(self.session.history.acknowledge(1,0))
+        self.assertTrue(self.session.playback_done(1))
+        self.assertFalse(self.session.reply_pending)
 
     async def test_provider_error_releases_microphone(self):
         async def fail(pcm): raise RuntimeError("Recognition failed")
@@ -254,52 +299,58 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.session.reply_pending)
         self.assertEqual(self.events[-1]["type"],"error")
 
-    async def test_later_sentence_failure_drains_valid_audio_without_claiming_unspoken_words(self):
-        calls=0
+    async def test_whole_reply_voice_failure_has_no_partial_audio_or_changed_delivery(self):
+        self.session.voice=VoiceSettings(emotion='sad')
+        attempted=[]
         async def audio(text,reference=None,on_notice=None):
-            nonlocal calls
-            calls += 1
-            if calls == 2: raise RuntimeError('No valid second take')
-            yield b'\x01\x00' * 100
+            attempted.append((text,reference))
+            raise VoiceTakeIncomplete('Neither complete take finished')
+            yield b''
         self.providers.audio=audio
         await self.session.begin(text='Hello');await self.session.task
-        self.assertFalse(any(event['type']=='error' for event in self.events))
-        result=self.events[-1]
-        self.assertEqual(result['type'],'response_done');self.assertTrue(result['partial'])
-        self.assertEqual(result['text'],'I am Anna, the washing machine.')
-        self.assertTrue(self.session.reply_pending)
-        self.assertEqual(list(self.session.history.phrases),[0])
-        self.assertTrue(self.session.history.acknowledge(1,0))
-        self.assertTrue(self.session.playback_done(1))
-        self.assertNotIn('ask for help',self.session.history.messages[-1]['content'])
+        self.assertEqual(len(attempted),1)
+        self.assertIn(EMOTION_DIRECTIONS['sad'],attempted[0][0])
+        self.assertTrue(attempted[0][0].endswith('I am Anna, the washing machine. I would like someone to ask for help.'))
+        self.assertEqual(self.audio,[])
+        self.assertFalse(self.session.reply_pending)
+        self.assertEqual(self.session.voice.emotion,'sad')
+        self.assertEqual(self.events[-1]['type'],'error')
+        self.assertIn('delivery has not been changed',self.events[-1]['message'])
+        self.assertFalse(any(event['type'] in ('phrase_done','response_done') for event in self.events))
+        self.assertEqual(self.session.history.messages[-1]['content'],'')
 
-    async def test_actor_failure_does_not_strand_a_sentence_while_its_pcm_is_being_sent(self):
-        second_audio_started=asyncio.Event()
+    async def test_actor_failure_after_complete_sentences_never_starts_voice_generation(self):
         async def text(character,history):
             yield 'I am Anna, the washing machine. I want to help with your laundry. '
-            await second_audio_started.wait()
             raise RuntimeError('Actor stream failed after complete sentences')
-        async def send_bytes(packet):
-            self.audio.append(packet)
-            if struct.unpack('!II',packet[:8])[1] == 1:
-                second_audio_started.set()
-                await asyncio.sleep(.01)
-        self.providers.text=text;self.session.send_bytes=send_bytes
+        self.providers.text=text
         await self.session.begin(text='Hello');await asyncio.wait_for(self.session.task,1)
-        self.assertEqual([e['seq'] for e in self.events if e['type']=='phrase_done'],[0,1])
-        self.assertTrue(self.events[-1]['partial'])
-        for seq in (0,1):self.assertTrue(self.session.history.acknowledge(1,seq))
-        self.assertTrue(self.session.playback_done(1))
+        self.assertTrue(any(event['type']=='text_delta' for event in self.events))
+        self.assertEqual(self.providers.spoken,[]);self.assertEqual(self.providers.references,[])
+        self.assertEqual(self.audio,[])
+        self.assertFalse(any(event['type'] in ('phrase_start','phrase_done','response_done') for event in self.events))
+        self.assertEqual(self.events[-1]['type'],'error')
+        self.assertFalse(self.session.reply_pending)
+        self.assertEqual(self.session.history.messages[-1]['content'],'')
+
+    async def test_empty_actor_reply_never_starts_voice_generation(self):
+        async def text(character,history):
+            yield ' '
+            yield '\n'
+        self.providers.text=text
+        await self.session.begin(text='Hello');await self.session.task
+        self.assertEqual(self.providers.spoken,[]);self.assertEqual(self.audio,[])
+        self.assertEqual(self.events[-1]['type'],'error')
         self.assertFalse(self.session.reply_pending)
 
     async def test_emotion_is_fixed_for_the_whole_reply_and_live_changes_wait_for_next_reply(self):
         self.session.voice=VoiceSettings(emotion='sad')
         self.providers.finish=asyncio.Event()
         await self.session.begin(text='Hello')
-        await asyncio.wait_for(self.audio_seen.wait(),1)
+        await asyncio.wait_for(self.text_seen.wait(),1)
         self.session.voice=self.session.voice.model_copy(update={'emotion':'excited'})
         self.providers.finish.set();await self.session.task
-        self.assertEqual(len(self.providers.spoken),2)
+        self.assertEqual(len(self.providers.spoken),1)
         for line in self.providers.spoken:
             self.assertTrue(line.startswith('<|speaker:0|> ['+EMOTION_DIRECTIONS['sad']+'] '))
             self.assertEqual(line.count('['),1)
@@ -307,15 +358,16 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         for seq in self.session.history.phrases:self.session.history.acknowledge(1,seq)
         self.assertTrue(self.session.playback_done(1))
         await self.session.begin(text='And now?');await self.session.task
+        self.assertEqual(len(self.providers.spoken),2)
         self.assertIn(EMOTION_DIRECTIONS['excited'],self.providers.spoken[-1])
 
     async def test_voice_retry_notice_is_visible_without_cancelling_the_reply(self):
         async def audio(text,reference=None,on_notice=None):
-            if on_notice:await on_notice('An incomplete expressive take was retried in natural delivery.')
+            if on_notice:await on_notice('Voice generation did not finish. Retrying the whole reply with the same emotion and voice.')
             yield b'\x01\x00'*100
         self.providers.audio=audio
         await self.session.begin(text='Hello');await self.session.task
-        self.assertTrue(any(e['type']=='voice_notice' and 'retried' in e['message'] for e in self.events))
+        self.assertTrue(any(e['type']=='voice_notice' and 'same emotion and voice' in e['message'] for e in self.events))
         self.assertEqual(self.events[-1]['type'],'response_done')
         self.assertTrue(self.session.reply_pending)
 
@@ -323,9 +375,11 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         settings=VoiceSettings(emotion='excited',event='laugh',reference_audio=reference_wav(),reference_text='Hello, I am Anna.')
         self.session.voice=settings;self.session.reference=settings.reference()
         await self.session.begin(text='Hello');await self.session.task
+        self.assertEqual(len(self.providers.spoken),1)
         self.assertTrue(all(ref==settings.reference() for ref in self.providers.references))
         self.assertTrue(all(EMOTION_DIRECTIONS['excited'] in line for line in self.providers.spoken))
-        self.assertIn('begin with a brief laugh',self.providers.spoken[0]);self.assertNotIn('begin with a brief laugh',self.providers.spoken[1])
+        self.assertEqual(self.providers.spoken[0].count('begin with a brief laugh'),1)
+        self.assertEqual(self.providers.spoken[0].count('['),1)
         self.assertTrue(all('[' not in event['text'] for event in self.events if event['type']=='text_delta'))
 
     async def test_reset_changes_behaviour_and_audio_without_rewriting_identity(self):
@@ -338,7 +392,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(self.session.trigger.delivery,self.providers.spoken[0])
         self.assertEqual(self.session.character.model_dump(),original)
         self.assertEqual(next(x for x in self.events if x['type']=='transcript')['source'],'action')
-        self.session.history.acknowledge(1,0);self.session.history.acknowledge(1,1);self.session.playback_done(1)
+        self.session.history.acknowledge(1,0);self.session.playback_done(1)
         await self.session.trigger_state(False)
         await self.session.begin(text='Hello again');await self.session.task
         self.assertFalse(self.session.trigger_active)
@@ -452,7 +506,7 @@ class LiveAPITests(unittest.TestCase):
     def test_status_identifies_the_loaded_voice_pipeline(self):
         app=create_app(preview=True,providers=FakeProviders())
         with TestClient(app) as client:
-            self.assertEqual(client.get('/api/status').json()['voice_pipeline'],'sentence-checked-v2')
+            self.assertEqual(client.get('/api/status').json()['voice_pipeline'],'reply-locked-v3')
 
     def test_live_delivery_and_trigger_controls_reach_the_next_answer(self):
         providers=FakeProviders()
@@ -502,7 +556,6 @@ class LiveAPITests(unittest.TestCase):
                 # These frames would trigger VAD. They must never cancel or enter recognition.
                 socket.send_bytes(frames(True,8))
                 socket.send_json({'type':'played','turn_id':1,'seq':0})
-                socket.send_json({'type':'played','turn_id':1,'seq':1})
                 socket.send_json({'type':'playback_done','turn_id':1})
                 # Audio still in flight at completion is discarded during the echo tail too.
                 socket.send_bytes(frames(True,8))
@@ -545,6 +598,10 @@ class LiveAPITests(unittest.TestCase):
                         event=json.loads(message['text']);events.append(event)
                         if event['type']=='response_done': break
                 self.assertTrue(packets)
+                self.assertEqual({struct.unpack('!II',packet[:8]) for packet in packets},{(1,0)})
+                self.assertEqual([event['seq'] for event in events if event['type']=='phrase_start'],[0])
+                self.assertEqual([event['seq'] for event in events if event['type']=='phrase_done'],[0])
+                self.assertEqual(len(providers.spoken),1)
                 self.assertTrue(any(x['type']=='transcript' for x in events))
                 self.assertTrue(any(x['type']=='metrics' for x in events))
                 socket.send_json({'type':'stop'})
@@ -598,7 +655,8 @@ class DirectorTests(unittest.IsolatedAsyncioTestCase):
             await session.begin(text='Let me help you.');await session.task
             self.assertIn(plan.intention,providers.characters[-1].beat)
             self.assertTrue(providers.spoken[0].startswith('<|speaker:0|> ['));self.assertIn(plan.delivery,providers.spoken[0])
-            self.assertIn('begin with a soft sigh',providers.spoken[0]);self.assertNotIn('begin with a soft sigh',providers.spoken[-1])
+            self.assertEqual(len(providers.spoken),1)
+            self.assertEqual(providers.spoken[0].count('begin with a soft sigh'),1)
             self.assertEqual(original.beat,example().beat)
             self.assertEqual(calls[0][3].notes,'Invite a practical choice.')
             note=next(e for e in events if e['type']=='director_note')

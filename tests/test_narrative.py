@@ -84,8 +84,10 @@ class NarrativeTests(unittest.TestCase):
 
 class NarrativeSessionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.events=[];self.providers=FakeProviders();self.clock=Clock()
-        async def send_json(value):self.events.append(value)
+        self.events=[];self.providers=FakeProviders();self.clock=Clock();self.text_seen=asyncio.Event()
+        async def send_json(value):
+            self.events.append(value)
+            if value['type']=='text_delta':self.text_seen.set()
         async def send_bytes(value):pass
         self.session=LiveSession(self.providers,example(),send_json,send_bytes,narrative=script(),clock=self.clock)
     async def asyncTearDown(self):await self.session.close()
@@ -96,10 +98,43 @@ class NarrativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.session.story_boundary());self.assertEqual(self.session.story.index,0)
         await self.session.story_control('next');self.assertEqual(self.session.story.pending,'next')
         self.assertEqual(self.session.story.heard,[])
-        for seq in range(len(self.session.history.phrases)):self.session.history.acknowledge(1,seq)
+        self.assertEqual(list(self.session.history.phrases),[0])
+        self.assertEqual(len(self.providers.spoken),1)
+        self.assertTrue(self.session.history.acknowledge(1,0))
         self.assertTrue(self.session.playback_done(1));self.assertTrue(self.session.story.heard)
         self.assertTrue(await self.session.story_boundary());self.assertEqual(self.session.story.index,1)
         self.assertEqual(self.session.story.heard,[])
+
+    async def test_beat_change_waits_through_actor_text_and_whole_reply_playback(self):
+        self.providers.finish=asyncio.Event()
+        await self.session.begin(text='Hello')
+        await asyncio.wait_for(self.text_seen.wait(),1)
+        self.assertEqual(self.providers.spoken,[])
+        await self.session.story_control('next')
+        self.assertEqual(self.session.story.pending,'next')
+        self.assertEqual(self.session.story.index,0)
+        self.providers.finish.set();await self.session.task
+        self.assertFalse(await self.session.story_boundary())
+        self.assertEqual(self.session.story.index,0)
+        self.assertEqual(self.session.story.heard,[])
+        self.assertEqual(len(self.providers.spoken),1)
+        self.assertTrue(self.session.history.acknowledge(1,0))
+        self.assertTrue(self.session.playback_done(1))
+        self.assertTrue(await self.session.story_boundary())
+        self.assertEqual(self.session.story.index,1)
+
+    async def test_interrupting_unacknowledged_whole_reply_cannot_create_assistant_story_evidence(self):
+        await self.session.begin(text='Hello');await self.session.task
+        self.assertEqual(len(self.providers.spoken),1)
+        self.assertEqual(self.session.story.heard,[])
+        await self.session.interrupt()
+        # The participant's actual utterance is heard; the interrupted AI reply
+        # must not become evidence for a goal or emotional change.
+        self.assertEqual(self.session.story.heard,[{'role':'user','content':'Hello'}])
+        self.assertEqual(self.session.history.messages[-1]['content'],'')
+        self.assertFalse(self.session.history.acknowledge(1,0))
+        self.assertEqual(self.events[-1]['type'],'interrupted')
+        self.assertEqual(self.events[-1]['heard'],'')
 
     async def test_model_completion_enters_next_beat_before_acting_without_changing_saved_character(self):
         async def direct(*args):
@@ -110,6 +145,8 @@ class NarrativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.story.index,1)
         self.assertIn('Invite one small safe choice.',self.providers.characters[-1].beat)
         self.assertNotIn('Finish this old goal.',self.providers.characters[-1].beat)
+        self.assertEqual(len(self.providers.spoken),1)
+        self.assertEqual(self.providers.spoken[0].count('['),1)
         self.assertIn(EMOTION_DIRECTIONS['calm'],self.providers.spoken[0]);self.assertEqual(self.session.character.model_dump(),original)
 
     async def test_between_turn_check_can_finish_beat_but_stale_result_cannot_skip_next_beat(self):

@@ -66,7 +66,7 @@ class VoiceSettings(Delivery):
 
 
 def spoken_input(text, delivery, first_phrase=False):
-    """Set one performance before a sentence, never change it after two words.
+    """Set one performance before the complete reply, never between sentences.
 
     A speaker-prefixed descriptive cue completed the real regression lines;
     the former stacked mid-sentence emotion/direction tags stalled on them.

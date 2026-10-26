@@ -1,6 +1,6 @@
-# Sentence completion and consistent emotion
+# Whole-reply completion and consistent emotion
 
-Updated 26 October 2026. The previous playback/token-budget patch was confirmed in the served frontend, but the user still heard missing sentence endings and words. Direct requests to the running Drama 3 server reproduced failures before browser playback.
+Updated 26 October 2026. The current policy is one continuous voice take per complete reply, with one fixed emotion and reference. The earlier sentence-level natural-delivery retry was reported to create unwanted mood changes and has been removed.
 
 ## What failed
 
@@ -10,21 +10,21 @@ The old expressive chunker also merged short sentences into longer synthesis req
 
 ## Current behaviour
 
-- One descriptive cue precedes the spoken sentence, after the documented `<|speaker:0|>` speaker marker. There are no delivery cues inserted after the first two words and no stacked emotion-label/direction tags.
-- The director chooses one steady delivery for a reply. Live delivery controls apply to the next reply. Short complete sentences are kept separate; punctuation waits for lookahead, and ellipses remain pauses. Unusually long sentences retain a bounded clause/word fallback.
-- The app collects one sentence's SSE audio and its terminal token-usage event before sending PCM to the browser. It validates 44.1 kHz mono PCM, alignment, size, a complete event stream and an output-token count below the requested maximum.
-- An incomplete or capped expressive take is discarded before playback and retried once without the performance cue, using the same voice reference. The interface explains the retry and natural delivery. A failed plain retry is reported, rather than silently claiming the sentence was spoken.
-- If a later sentence fails, previously completed audio finishes playing. Only that completed prefix can enter heard conversation history; failed text is removed from the displayed reply.
+- The director's selected delivery is snapshotted before actor generation. Operator changes apply to the next reply.
+- Actor text still streams to the transcript, but the app waits for the final text before calling TTS. The whole reply goes through one synthesis request with one speaker-prefixed descriptive cue. It is not split into independent sentence takes, which can vary their performance even with the same cue.
+- The app collects the full take's SSE audio and terminal token-usage event before sending PCM. It validates 44.1 kHz mono PCM, alignment, size, complete events and an output-token count below the requested maximum.
+- An incomplete/capped take is discarded and retried once with the **identical full text, cue, emotion and voice reference**. This applies to plain replies too. No retry drops emotional instructions, changes voice, or substitutes natural delivery. If both attempts fail, the interface reports failure without playing either incomplete take.
+- Existing `phrase_start`, `phrase_done` and binary sequence IDs remain compatible, but sequence `0` now denotes the entire reply. Playback acknowledgement and heard-memory commitment wait until all its audio finishes. An interrupted reply is conservatively omitted as a whole; the system does not infer which words were heard.
 
-This adds a sentence's synthesis time before playback. Later sentences can be prepared while earlier ones play; no full-reply gate is added.
+**Latency tradeoff:** audio waits for complete actor text and a validated full TTS take. This adds startup delay compared with sentence streaming, while avoiding audible sentence-to-sentence take resets or fallback mood changes. Once ready, PCM is transported in bounded chunks and the browser preserves its native playback rate. Model prosody can still vary within one take; this change removes application-level emotion switches rather than guaranteeing a particular acted performance.
 
-## Validation and limits
+## Earlier diagnostic evidence and current limits
 
 The real H200 comparison used five cue formats on three lines, followed by twelve speaker-prefixed descriptive takes covering all four reported sentences with male and female references. All twelve ended below their token budgets. Local Whisper recovered the full clauses in all twelve, with ten exact normalized word matches and two `called`/`call` transcription differences; `mum`/`mom` was normalized. Eight additional emotion/expression takes retained the full diagnostic line. These small tests do not establish general word accuracy or subjective emotional quality.
 
-The updated local sentence controller was also exercised against the running Drama 3 service and emitted four completed sentences with final playback acknowledgement accepted; local ASR recovered their full wording apart from mum/mom spelling. The second reported reply, “Just… sitting here. Called my mom. She asked if I’d met anyone. I said no. I couldn’t say the truth. Not again.”, was then synthesized as six separate sentences. The male-reference take retained all six in the local transcription; automatic voice had a `Called`/`Hold` recognition difference in one sentence. Retest with a fixed reference to compare delivery consistently. Generated WAVs and transcripts are held only in ignored `outputs/voice-cutoff-diagnosis/`, not committed. No model weights, dependency pins or GPU placement changed. The running browser application still needs a pull/restart before it uses this controller.
+The preceding sentence-level controller was exercised against the running Drama 3 service and emitted four completed sentences with final playback acknowledgement accepted; local ASR recovered their full wording apart from mum/mom spelling. The second reported six-short-sentence reply also retained all six sentences with a male reference; automatic voice had a Called/Hold recognition difference. These are evidence for the earlier cue fix, **not validation of the current whole-reply runtime**. Generated WAVs and transcripts are held only in ignored `outputs/voice-cutoff-diagnosis/`, not committed. No model weights, dependency pins or GPU placement changed.
 
-Protocol completion does not prove that every word was spoken: early EOS can still omit or mispronounce words, and references influence prosody. No per-sentence ASR gate is added to the live call; ASR was used only for the local diagnostic comparison. The natural retry prioritizes a complete sentence over preserving its expressive cue.
+Protocol completion does not prove that every word was spoken: early EOS can still omit or mispronounce words, and references influence prosody. No live ASR gate is added to generated speech; ASR was used only for the diagnostic comparisons. Current unit checks cover a single full-reply TTS call, identical retry payloads, final PCM, per-reply delivery snapshots, cancellation, failure and whole-playback memory commitment. A live listening check remains necessary for subjective emotional consistency.
 
 ## Deploy and verify
 
@@ -35,6 +35,6 @@ GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull
 bash scripts/run_live_stack.sh --profile quality-3gpu
 ```
 
-No `--prepare` or model download is needed for this code change. Refresh the browser. The running `/api/status` should include `"voice_pipeline":"sentence-checked-v2"`; a newer static file alone does not confirm that the Python process was restarted. Test typed playback before the microphone, listen to the complete last sentence, then change emotion between replies and check Stop reply.
+No `--prepare` or model download is needed for this code change. Refresh the browser. The running `/api/status` should include `"voice_pipeline":"reply-locked-v3"`; a newer static file alone does not confirm that the Python process was restarted. Test typed playback first, listen to all sentences as one take, then change emotion between replies and check Stop reply.
 
 Relevant files: `live_voice/voice.py`, `turns.py`, `providers.py`, `session.py`, `director.py`, `frontend/live.js`, `tests/test_phrase_chunker.py` and `tests/test_voice_generation.py`.

@@ -228,23 +228,21 @@ class LocalProviders:
             return bytes(pcm)
 
     async def audio(self, text, reference=None, on_notice=None):
-        """Validate one bounded sentence before playing it, then stream sentences.
+        """Validate one bounded reply before playing it, with one identical retry.
 
-        Buffering until its done event adds the sentence's synthesis time before
+        Buffering until its done event adds the reply's synthesis time before
         playback; it prevents an unconfirmed/capped take from reaching listeners.
         This verifies protocol completion, not that every requested word was said.
         """
         try:
             pcm = await self._voice_take(text, reference)
         except VoiceTakeIncomplete:
-            # Remove only our single, sentence-wide prefix, never user dialogue
-            # or arbitrary mid-sentence bracketed text. The voice reference stays.
-            plain = re.sub(r'\A<\|speaker:0\|> \[[^\[\]\r\n]+\] ', '', text, count=1)
-            if plain == text: raise
-            message = 'The expressive voice take did not finish. Retrying this sentence in natural delivery with the same voice.'
+            # The whole reply keeps its original emotion, instructions and voice.
+            # Never make a failed expressive take succeed by changing its delivery.
+            message = 'Voice generation did not finish. Retrying the whole reply with the same emotion and voice.'
             if on_notice is not None: await on_notice(message)
             else: logger.warning(message)
-            pcm = await self._voice_take(plain, reference)
+            pcm = await self._voice_take(text, reference)
         # Every final sample is retained; packets remain bounded for WebSocket.
         for start in range(0, len(pcm), 16384):
             yield pcm[start:start + 16384]

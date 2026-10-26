@@ -131,6 +131,7 @@ function event(data){
   if(data.type==='empty_transcript'){feedback('I did not catch that. Try again.');resumeMicrophone();return;}
   if(data.turn_id!==currentTurn)return;
   if(data.type==='voice_notice'){feedback(data.message);return;}
+  if(data.type==='phrase_start'){state('Preparing the whole reply… · Mic paused');return;}
   if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.text,'user');state($('director-enabled').checked?'Directing the next reply… · Mic paused':$('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
   if(data.type==='text_delta'){
     if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));

@@ -70,7 +70,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
     async def status():
         health = {"stt":False,"llm":False,"tts":False} if preview else await services.health()
         return {"preview":preview,"ready":all(health.values()),"services":health,
-                "voice_pipeline":"sentence-checked-v2",
+                "voice_pipeline":"reply-locked-v3",
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
                 "models":{"actor":deployment['actor']['id'],"director":(deployment['director'] or deployment['actor'])['id']},
@@ -119,7 +119,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
                 detector.pending.clear(); detector.reset()
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
                              "endpoint_ms":480, "turn_taking":"Stop reply to interrupt; mic resumes after playback",
-                             "voice":"uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated phrase anchors this call"})
+                             "voice":"uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated reply anchors this call"})
             await session.start_story()
             while True:
                 message = await socket.receive()

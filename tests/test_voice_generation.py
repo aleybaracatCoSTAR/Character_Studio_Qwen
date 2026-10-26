@@ -96,7 +96,7 @@ class VoiceGenerationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(requests[0]['ref_text'], REFERENCE[1])
         finally: await providers.close()
 
-    async def test_capped_styled_take_is_discarded_then_plain_sentence_reuses_reference(self):
+    async def test_capped_styled_take_is_discarded_then_identical_reply_reuses_emotion_and_reference(self):
         requests = []; notices = []
         def serve(request):
             payload = json.loads(request.content); requests.append(payload)
@@ -108,14 +108,16 @@ class VoiceGenerationTests(unittest.IsolatedAsyncioTestCase):
         try:
             chunks = [part async for part in providers.audio(STYLED, REFERENCE, on_notice=notice)]
             self.assertEqual(b''.join(chunks), b'\x01\x02\x03\x04')
-            self.assertEqual([item['input'] for item in requests], [STYLED, PLAIN])
+            self.assertEqual([item['input'] for item in requests], [STYLED, STYLED])
+            self.assertEqual(requests[0], requests[1])
             self.assertEqual(len(notices), 1)
+            self.assertEqual(notices[0], 'Voice generation did not finish. Retrying the whole reply with the same emotion and voice.')
             self.assertNotIn(PLAIN, notices[0])
             for item in requests:
                 self.assertEqual((item['ref_audio'], item['ref_text']), REFERENCE)
         finally: await providers.close()
 
-    async def test_explicit_sse_error_can_retry_styled_sentence_once(self):
+    async def test_explicit_sse_error_can_retry_styled_reply_once_without_changing_any_parameters(self):
         requests = []
         def serve(request):
             requests.append(json.loads(request.content))
@@ -128,12 +130,29 @@ class VoiceGenerationTests(unittest.IsolatedAsyncioTestCase):
                 pcm = b''.join([part async for part in providers.audio(STYLED)])
             self.assertEqual(pcm, b'\x01\x02\x03\x04')
             self.assertEqual(len(requests), 2)
+            self.assertEqual(requests[0], requests[1])
             self.assertNotIn('private service details', '\n'.join(captured.output))
             self.assertNotIn(PLAIN, '\n'.join(captured.output))
         finally: await providers.close()
 
-    async def test_plain_failure_and_failed_fallback_surface_without_another_retry(self):
-        for text, expected_requests in ((PLAIN, 1), (STYLED, 2)):
+    async def test_a_plain_incomplete_reply_also_retries_once_with_identical_parameters(self):
+        requests = []; notices = []
+        def serve(request):
+            requests.append(json.loads(request.content))
+            return response(delta() if len(requests) == 1 else delta() + done())
+        async def notice(message): notices.append(message)
+        providers = LocalProviders(DummySTT(), transport=httpx.MockTransport(serve))
+        try:
+            pcm = b''.join([part async for part in providers.audio(PLAIN, REFERENCE, on_notice=notice)])
+            self.assertEqual(pcm, b'\x01\x02\x03\x04')
+            self.assertEqual(len(requests), 2)
+            self.assertEqual(requests[0], requests[1])
+            self.assertEqual(requests[1]['input'], PLAIN)
+            self.assertEqual(len(notices), 1)
+        finally: await providers.close()
+
+    async def test_plain_or_styled_failed_retry_surfaces_without_sending_partial_audio(self):
+        for text in (PLAIN, STYLED):
             requests = []
             def serve(request):
                 payload = json.loads(request.content); requests.append(payload)
@@ -144,8 +163,9 @@ class VoiceGenerationTests(unittest.IsolatedAsyncioTestCase):
             try:
                 with self.assertRaises(VoiceTakeIncomplete):
                     _ = [part async for part in providers.audio(text, on_notice=notice)]
-                self.assertEqual(len(requests), expected_requests)
-                self.assertEqual(len(notices), expected_requests - 1)
+                self.assertEqual(len(requests), 2)
+                self.assertEqual(requests[0], requests[1])
+                self.assertEqual(len(notices), 1)
             finally: await providers.close()
 
     async def test_bad_or_missing_pcm_format_metadata_is_not_guessed_or_retried(self):
@@ -180,13 +200,14 @@ class VoiceGenerationTests(unittest.IsolatedAsyncioTestCase):
         for payload in cases:
             requests = []; yielded = []
             def serve(request): requests.append(request); return response(payload)
+            async def notice(message): pass
             providers = LocalProviders(DummySTT(), transport=httpx.MockTransport(serve))
             try:
                 with self.subTest(payload=payload):
                     with self.assertRaises(VoiceTakeIncomplete):
-                        async for part in providers.audio(PLAIN): yielded.append(part)
+                        async for part in providers.audio(PLAIN, on_notice=notice): yielded.append(part)
                     self.assertEqual(yielded, [])
-                    self.assertEqual(len(requests), 1)
+                    self.assertEqual(len(requests), 2)
             finally: await providers.close()
 
     async def test_http_network_and_content_type_failures_are_not_retried(self):
@@ -220,7 +241,7 @@ class VoiceGenerationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(notices, [])
         finally: await providers.close()
 
-    async def test_only_the_application_sentence_prefix_can_be_removed_for_retry(self):
+    async def test_retry_never_strips_a_cue_speaker_control_or_any_other_reply_text(self):
         for text in ('[sad] ' + PLAIN, 'I love [sad] everyone.',
                      '<|speaker:1|> [sad] ' + PLAIN, '<|speaker:0|> [sad] [quiet] ' + PLAIN):
             requests = []
@@ -232,11 +253,9 @@ class VoiceGenerationTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(text=text):
                     with self.assertRaises(VoiceTakeIncomplete):
                         _ = [part async for part in providers.audio(text, on_notice=notice)]
-                    # Only a single application prefix is eligible, not older
-                    # arbitrary tags or a different speaker's control token.
-                    expected = 2 if text.startswith('<|speaker:0|> [sad] ') else 1
-                    self.assertEqual(len(requests), expected)
-                    if expected == 2: self.assertEqual(requests[1]['input'], '[quiet] ' + PLAIN)
+                    self.assertEqual(len(requests), 2)
+                    self.assertEqual(requests[0], requests[1])
+                    self.assertEqual(requests[1]['input'], text)
             finally: await providers.close()
 
 
