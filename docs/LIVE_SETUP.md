@@ -55,6 +55,8 @@ If startup stops, read the indicated log, for example:
 tail -n 60 /scratch4weeks/$USER/live-voice-store/logs/tts.log
 ```
 
+If a port is reported in use, inspect actual listeners in the GPU terminal with `ss -ltnp '( sport = :18091 or sport = :18092 or sport = :18093 or sport = :18094 )'`. An earlier plain-bind preflight could falsely reject a recently closed connection in TIME_WAIT even when this list was empty. Pull the corrected launcher: it accepts a normal TCP restart while still refusing active listeners. An empty list is not a reason to kill processes or cancel the allocation.
+
 Do not proceed to tunnel debugging while a model server cannot start. Do not change system MPS services if the cluster rejects the runtime's private MPS setup; retain that error for the administrator.
 
 ## 4. Open it from your Mac

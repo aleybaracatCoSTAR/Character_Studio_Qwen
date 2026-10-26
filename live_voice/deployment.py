@@ -1,10 +1,40 @@
 """Reproducible single-node GPU placement; no model is downloaded or started here."""
 import json
 import os
+import errno
+import socket
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STT = ('Systran/faster-whisper-base.en','3d3d5dee26484f91867d81cb899cfcf72b96be6c')
+
+
+def check_ports(ports):
+    """Allow a server restart after TIME_WAIT, while refusing active listeners.
+
+    Match asyncio/Uvicorn's SO_REUSEADDR policy. A plain bind can mistake a
+    recently closed accepted connection for a still-running test server.
+    This does not use SO_REUSEPORT or stop any existing process.
+    """
+    for port in ports:
+        # On some systems a reuse-enabled bind to a specific address can pass
+        # while a wildcard listener exists. Refuse any reachable TCP listener
+        # first, even if that process used different socket bind options.
+        with socket.socket() as client:
+            client.settimeout(.3)
+            result = client.connect_ex(('127.0.0.1', port))
+        if result == 0:
+            raise ValueError(f'Port {port} is already in use. Inspect its owner with ss -ltnp before restarting.')
+        if result != errno.ECONNREFUSED:
+            raise OSError(result, f'Could not verify local port {port}')
+        try:
+            with socket.socket() as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind(('127.0.0.1', port))
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE:
+                raise ValueError(f'Port {port} is already in use. Inspect its owner with ss -ltnp before restarting.') from exc
+            raise
 
 
 def profile(name=None):

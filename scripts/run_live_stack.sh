@@ -36,13 +36,10 @@ print('Live profile:',os.environ['LIVE_PROFILE'],'· allocated placement:',devic
 PYGPU
 .venv-drama3/bin/python experiments/drama3/check_install.py
 .venv-drama3/bin/python - <<'PY'
-import socket
-from live_voice.deployment import profile
+from live_voice.deployment import profile,check_ports
 ports=[18091,18092,18093]+([18094] if profile()['director'] else [])
-for port in ports:
-    try:
-        with socket.socket() as s: s.bind(('127.0.0.1',port))
-    except OSError: raise SystemExit(f'Port {port} is occupied. Stop your earlier test server before launching this stack.')
+try: check_ports(ports)
+except ValueError as exc: raise SystemExit(str(exc))
 PY
 if [[ "$prepare" == 1 ]]; then
   echo 'Preparing the live app environment; reusing the working Drama 3 GPU environment.'

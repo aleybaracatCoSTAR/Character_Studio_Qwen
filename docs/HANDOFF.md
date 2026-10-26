@@ -1,3 +1,7 @@
+# Latest change: TCP restart preflight, 26 October 2026
+
+The first restart after the sentence fix was refused as “Port 18091 is occupied”, but the user's `ss -ltnp` output showed no listeners on any of the four ports. The launcher used a plain bind probe, which was reproduced rejecting a recently closed TCP connection in TIME_WAIT. It now calls `deployment.check_ports`: first refuse reachable listeners, then probe with the same SO_REUSEADDR policy as the server. SO_REUSEPORT is never enabled and no existing process is stopped. Four real-socket tests cover a closed-connection restart, active loopback and wildcard listeners, and releasing a free probe port. The prior sentence-audio code is unchanged.
+
 # Latest change: verified sentence takes and steady delivery, 26 October 2026
 
 See [VOICE_COMPLETION.md](VOICE_COMPLETION.md). The October 23 frontend patch was confirmed deployed, but direct H200 tests reproduced missing speech with stacked mid-sentence cues. The controller now uses one speaker-prefixed descriptive cue before the sentence, preserves short sentence boundaries and snapshots one delivery for a reply. The director is prompted to change emotion between replies rather than between words. A sentence's SSE completion, token budget and native PCM format are validated before playback. An incomplete expressive take is discarded and retried once as natural speech with the same voice reference and a visible notice. A later unrecoverable failure drains valid earlier audio and removes unspoken text, instead of clearing that audio.
