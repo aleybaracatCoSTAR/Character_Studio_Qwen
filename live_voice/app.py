@@ -70,6 +70,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
     async def status():
         health = {"stt":False,"llm":False,"tts":False} if preview else await services.health()
         return {"preview":preview,"ready":all(health.values()),"services":health,
+                "voice_pipeline":"sentence-checked-v2",
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
                 "models":{"actor":deployment['actor']['id'],"director":(deployment['director'] or deployment['actor'])['id']},

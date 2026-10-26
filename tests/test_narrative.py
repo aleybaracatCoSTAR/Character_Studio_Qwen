@@ -8,7 +8,7 @@ from live_voice.deployment import assigned_devices, checkpoints, model_command, 
 from live_voice.director import DirectorPlan, director_messages, DirectorSettings
 from live_voice.narrative import NarrativeSettings, NarrativeState, StoryBeat
 from live_voice.session import LiveSession
-from live_voice.voice import VoiceSettings
+from live_voice.voice import VoiceSettings, EMOTION_DIRECTIONS
 from studio.characters import example
 from test_live_voice import FakeProviders
 
@@ -110,7 +110,7 @@ class NarrativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.story.index,1)
         self.assertIn('Invite one small safe choice.',self.providers.characters[-1].beat)
         self.assertNotIn('Finish this old goal.',self.providers.characters[-1].beat)
-        self.assertIn('[calm]',self.providers.spoken[0]);self.assertEqual(self.session.character.model_dump(),original)
+        self.assertIn(EMOTION_DIRECTIONS['calm'],self.providers.spoken[0]);self.assertEqual(self.session.character.model_dump(),original)
 
     async def test_between_turn_check_can_finish_beat_but_stale_result_cannot_skip_next_beat(self):
         self.clock.now=12;self.session.story.remember(0,'I can help with the washing.','Thank you.')

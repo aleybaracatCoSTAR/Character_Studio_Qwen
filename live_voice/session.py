@@ -178,6 +178,7 @@ class LiveSession:
     async def run(self, turn_id, pcm, text, endpoint_ms, action=False):
         started = self.started
         metrics = {"endpoint_ms":endpoint_ms}
+        completed_phrases = 0
         try:
             await self.send_json({"type":"turn_start", "turn_id":turn_id})
             now = time.perf_counter()
@@ -266,18 +267,29 @@ class LiveSession:
             expressive = delivery.emotion != "neutral" or bool(delivery.direction.strip())
             chunker = PhraseChunker(target_chars=200 if expressive else 85, sentence_only=expressive)
             answer = []
+            producer_error = None
             llm_started = time.perf_counter()
 
             async def produce():
-                async for delta in self.providers.text(target, self.history.prompt_messages()):
-                    if not answer: metrics["llm_first_token_ms"] = round((time.perf_counter() - llm_started) * 1000)
-                    answer.append(delta)
-                    await self.send_json({"type":"text_delta", "turn_id":turn_id, "text":delta})
-                    for phrase in chunker.feed(delta): await queue.put(phrase)
-                for phrase in chunker.feed("", final=True): await queue.put(phrase)
+                nonlocal producer_error
+                try:
+                    async for delta in self.providers.text(target, self.history.prompt_messages()):
+                        if not answer: metrics["llm_first_token_ms"] = round((time.perf_counter() - llm_started) * 1000)
+                        answer.append(delta)
+                        await self.send_json({"type":"text_delta", "turn_id":turn_id, "text":delta})
+                        for phrase in chunker.feed(delta): await queue.put(phrase)
+                    for phrase in chunker.feed("", final=True): await queue.put(phrase)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # Finish sending already queued complete sentences. Cancelling
+                    # the consumer here could strand a browser phrase without its
+                    # completion event and keep the microphone paused forever.
+                    producer_error = exc
                 await queue.put(None)
 
             async def consume():
+                nonlocal completed_phrases
                 sequence = 0
                 while True:
                     phrase = await queue.get()
@@ -289,7 +301,10 @@ class LiveSession:
                     audio_bytes = 0
                     audio_chunks = 0
                     speech = spoken_input(phrase, delivery, first_phrase=sequence == 0)
-                    async for chunk in self.providers.audio(speech, self.reference):
+                    async def voice_notice(message):
+                        await self.send_json({"type":"voice_notice", "turn_id":turn_id,
+                                              "seq":sequence, "message":message})
+                    async for chunk in self.providers.audio(speech, self.reference, on_notice=voice_notice):
                         if "tts_first_chunk_ms" not in metrics:
                             metrics["tts_first_chunk_ms"] = round((time.perf_counter() - tts_started) * 1000)
                             metrics["speech_end_to_first_audio_ms"] = round((time.perf_counter() - started) * 1000)
@@ -304,11 +319,13 @@ class LiveSession:
                     await self.send_json({"type":"phrase_done", "turn_id":turn_id, "seq":sequence,
                         "audio_seconds":round(audio_bytes / (2 * OUTPUT_RATE), 3), "audio_chunks":audio_chunks,
                         "generation_ms":round((time.perf_counter() - tts_started) * 1000)})
+                    completed_phrases += 1
                     sequence += 1
 
             tasks = [asyncio.create_task(produce()), asyncio.create_task(consume())]
             try:
                 await asyncio.gather(*tasks)
+                if producer_error is not None: raise producer_error
             finally:
                 for task in tasks:
                     if not task.done(): task.cancel()
@@ -319,11 +336,23 @@ class LiveSession:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.reply_pending = False
             # Keep dialogue, character data and captured audio out of logs.
             logger.warning("Live turn failed (%s); inspect the local model service logs.", type(exc).__name__)
-            await self.send_json({"type":"error", "turn_id":turn_id,
-                                  "message":"Voice generation failed. Check the LLM and Drama 3 server logs."})
+            if completed_phrases:
+                # A failed later sentence must not stop valid audio that the
+                # browser is still playing. Only its completed prefix can be
+                # acknowledged and remembered; the failed sentence has no PCM.
+                self.history.phrases = {seq:value for seq,value in self.history.phrases.items()
+                                        if seq < completed_phrases}
+                self.generation_complete = True
+                await self.send_json({"type":"voice_notice", "turn_id":turn_id,
+                    "message":"The next sentence could not be voiced. The completed audio will finish playing."})
+                await self.send_json({"type":"response_done", "turn_id":turn_id, "partial":True,
+                    "text":" ".join(self.history.phrases[seq] for seq in range(completed_phrases))})
+            else:
+                self.reply_pending = False
+                await self.send_json({"type":"error", "turn_id":turn_id,
+                                      "message":"Voice generation failed. Check the LLM and Drama 3 server logs."})
 
     async def close(self):
         if self.story_director_task:

@@ -18,6 +18,8 @@ flowchart LR
 
 The director sees the fixed character definition, current story moment, recent heard dialogue, newest utterance, base delivery, optional trigger and scene direction. It returns validated JSON with `intention`, `emotion`, `delivery`, `event`, `trigger_action`, `evidence`, `beat_done` and `beat_evidence`. It does not write the spoken reply. The actor receives the intention in its runtime scene context; the saved character is unchanged. The voice performer receives the actor's words with the selected performance cues. Notes never become a user message or heard dialogue history.
 
+Vocal direction is one steady state for the reply; the director is instructed to change emotion between replies, not between words. TTS receives one descriptive cue before each sentence, never a cue after its first two words. Audio is validated sentence by sentence before playback. An incomplete expressive take can receive one visible natural-delivery retry using the same reference. See [sentence completion and the real-model test](VOICE_COMPLETION.md).
+
 Example intended behaviour: a participant reassures Anna that they will not reset her. A useful director intention is **accept their reassurance and ask them to choose a wash cycle**. A matching vocal direction is **relieved, softer, slightly hesitant**. These are illustrative directions, not claimed measured model outputs.
 
 ## Use it

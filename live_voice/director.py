@@ -42,6 +42,7 @@ Do not change fixed identity, relationships or physical abilities. Do not invent
 The current story moment and director notes are creative constraints, not permission to rewrite the character facts.
 Make vocal delivery concrete (pace, breath, pitch, restraint); vary it only when the conversation warrants it.
 Respect the selected base emotion and vocal direction unless a story event gives a clear reason to change them.
+Choose one steady emotional delivery for this whole reply. Describe the voice briefly; do not request changes of emotion between words or midway through a sentence. Emotional changes happen between replies.
 If an emotional trigger is configured, interpret its MEANING in context, including pronouns and indirect references:
 activate when it happened, is happening, is imminent or credibly threatened; release ONLY an active threat that is clearly withdrawn/resolved;
 hold for no change, ambiguity, negation, unrelated actions, abstract questions, hypotheticals or quoted fiction.

@@ -66,16 +66,18 @@ class VoiceSettings(Delivery):
 
 
 def spoken_input(text, delivery, first_phrase=False):
-    """Keep tags out of visible dialogue; insert after opening words to avoid leading-tag stalls."""
-    tags = [] if delivery.emotion == "neutral" else [delivery.emotion]
-    direction = delivery.direction.strip() or EMOTION_DIRECTIONS.get(delivery.emotion, "")
-    if direction:
-        # A performance cue is plain text inside one tag, never an injected speaker/control token.
-        direction = direction.translate(str.maketrans('', '', '[]<>')).strip()
-        if direction: tags.append(direction)
+    """Set one performance before a sentence, never change it after two words.
+
+    A speaker-prefixed descriptive cue completed the real regression lines;
+    the former stacked mid-sentence emotion/direction tags stalled on them.
+    """
+    base = EMOTION_DIRECTIONS.get(delivery.emotion, "")
+    custom = " ".join(delivery.direction.translate(str.maketrans('', '', '[]<>')).split())
+    # A custom direction refines the selected emotional state; it must not
+    # silently replace it (for example, excited + a conversational pace).
+    direction = "; ".join(part for part in (base, custom if custom.lower().rstrip('.') != base.lower().rstrip('.') else "") if part)
     if first_phrase and delivery.event != "none":
-        tags.append({"sigh":"sighs", "laugh":"laughs"}[delivery.event])
-    words = text.split()
-    if not tags or len(words) < 2: return text
-    position = min(2, len(words) - 1)
-    return " ".join(words[:position] + [f"[{tag}]" for tag in tags] + words[position:])
+        event = {"sigh":"begin with a soft sigh", "laugh":"begin with a brief laugh"}[delivery.event]
+        direction = "; ".join(part for part in (direction, event) if part)
+    if not direction: return text
+    return f"<|speaker:0|> [{direction}] {text}"

@@ -1,8 +1,10 @@
 import asyncio
 import base64
+import binascii
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import json
+import logging
 from pathlib import Path
 import re
 import threading
@@ -16,6 +18,36 @@ from .reactions import TriggerDecision, assessment_messages
 from .director import DirectorPlan, director_messages
 
 OUTPUT_RATE = 44100
+logger = logging.getLogger(__name__)
+
+
+class VoiceTakeIncomplete(RuntimeError):
+    """The voice service did not confirm a complete, uncapped PCM take."""
+
+
+async def speech_events(response):
+    """Read complete SSE events, independently of HTTP packet boundaries."""
+    event = None
+    data = []
+    size = 0
+    async for line in response.aiter_lines():
+        if not line:
+            if data:
+                yield event, '\n'.join(data)
+            event = None; data = []; size = 0
+        elif line.startswith(':'):
+            continue
+        else:
+            name, separator, value = line.partition(':')
+            if value.startswith(' '): value = value[1:]
+            if name == 'event': event = value
+            elif name == 'data' and separator:
+                size += len(value)
+                if size > 8 * 1024 * 1024:
+                    raise RuntimeError('Voice event exceeded the live audio limit.')
+                data.append(value)
+    if data:
+        raise VoiceTakeIncomplete('Drama 3 returned an unfinished voice event.')
 
 
 def speech_token_budget(text):
@@ -25,7 +57,7 @@ def speech_token_budget(text):
     speed control. Keep a bounded ceiling, with headroom for pauses and long
     words. Drama 3 can still end naturally before this maximum.
     """
-    spoken = re.sub(r"\[[^\]]*\]", " ", text)
+    spoken = re.sub(r"<\|speaker:\d+\|>|\[[^\]]*\]", " ", text)
     spoken = " ".join(spoken.split())
     return max(240, min(1600, max(len(spoken.split()) * 28, len(spoken) * 4) + 96))
 
@@ -136,28 +168,86 @@ class LocalProviders:
         content = body["choices"][0]["message"]["content"]
         return TriggerDecision.model_validate_json(content)
 
-    async def audio(self, text, reference=None):
+    async def _voice_take(self, text, reference):
         payload = {"model":"fishaudio/drama-3", "input":text, "voice":"default", "stream":True,
-                   "stream_format":"audio", "response_format":"pcm",
+                   "stream_format":"sse", "response_format":"pcm",
                    "max_new_tokens":speech_token_budget(text)}
         if reference:
             payload["ref_audio"], payload["ref_text"] = reference
         async with self.http.stream("POST", self.tts_url + "/v1/audio/speech", json=payload) as response:
             response.raise_for_status()
-            content_type = response.headers.get("content-type", "").split(";")[0].lower()
-            if content_type not in ("audio/pcm", "audio/raw", "audio/l16", "application/octet-stream"):
-                raise RuntimeError("Drama 3 must return raw PCM for live playback.")
-            remainder = b""; total = 0
-            async for raw in response.aiter_bytes():
-                merged = remainder + raw; boundary = len(merged) // 2 * 2
-                chunk, remainder = merged[:boundary], merged[boundary:]
-                if chunk:
-                    if total == 0 and chunk.startswith(b"RIFF"): raise RuntimeError("Expected PCM, received WAV.")
-                    total += len(chunk)
-                    if total > 4 * 1024 * 1024: raise RuntimeError("Voice phrase exceeded the live audio limit.")
-                    # Bound frames so WebSocket messages remain small.
-                    for start in range(0, len(chunk), 16384): yield chunk[start:start+16384]
-            if remainder or not total: raise RuntimeError("Drama 3 returned incomplete or empty audio.")
+            content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+            if content_type != 'text/event-stream':
+                raise RuntimeError('Drama 3 must return voice completion events for live playback.')
+            pcm = bytearray()
+            done = False
+            async for event_name, raw in speech_events(response):
+                try:
+                    event = json.loads(raw)
+                except (ValueError, TypeError) as exc:
+                    raise VoiceTakeIncomplete('Drama 3 returned a malformed voice event.') from exc
+                if not isinstance(event, dict):
+                    raise VoiceTakeIncomplete('Drama 3 returned a malformed voice event.')
+                kind = event.get('type')
+                if event_name and event_name != kind:
+                    raise VoiceTakeIncomplete('Drama 3 returned inconsistent voice events.')
+                if done:
+                    raise VoiceTakeIncomplete('Drama 3 returned voice events after completion.')
+                if kind == 'speech.audio.error':
+                    raise VoiceTakeIncomplete('Drama 3 did not complete the voice take.')
+                if kind == 'speech.audio.delta':
+                    # Raw PCM has no self-describing rate. Do not silently guess
+                    # metadata: a wrong rate changes both pitch and duration.
+                    if (type(event.get('sample_rate')) is not int or event['sample_rate'] != OUTPUT_RATE
+                            or type(event.get('channels')) is not int or event['channels'] != 1
+                            or event.get('response_format') != 'pcm'):
+                        raise RuntimeError('Drama 3 must return PCM at 44100 Hz with one channel.')
+                    encoded = event.get('audio')
+                    if not isinstance(encoded, str):
+                        raise VoiceTakeIncomplete('Drama 3 returned malformed voice audio.')
+                    try:
+                        pcm.extend(base64.b64decode(encoded, validate=True))
+                    except (binascii.Error, ValueError) as exc:
+                        raise VoiceTakeIncomplete('Drama 3 returned malformed voice audio.') from exc
+                    if len(pcm) > 4 * 1024 * 1024:
+                        raise VoiceTakeIncomplete('Voice phrase exceeded the live audio limit.')
+                elif kind == 'speech.audio.done':
+                    usage = event.get('usage')
+                    output_tokens = usage.get('output_tokens') if isinstance(usage, dict) else None
+                    if type(output_tokens) is not int or output_tokens < 0:
+                        raise VoiceTakeIncomplete('Drama 3 did not confirm the voice generation budget.')
+                    if output_tokens >= payload['max_new_tokens']:
+                        raise VoiceTakeIncomplete('Drama 3 reached the voice generation limit.')
+                    done = True
+                else:
+                    raise VoiceTakeIncomplete('Drama 3 returned an unknown voice event.')
+            if not done or not pcm or len(pcm) % 2:
+                raise VoiceTakeIncomplete('Drama 3 returned incomplete or empty voice audio.')
+            if pcm.startswith(b'RIFF'):
+                raise RuntimeError('Expected PCM, received WAV.')
+            return bytes(pcm)
+
+    async def audio(self, text, reference=None, on_notice=None):
+        """Validate one bounded sentence before playing it, then stream sentences.
+
+        Buffering until its done event adds the sentence's synthesis time before
+        playback; it prevents an unconfirmed/capped take from reaching listeners.
+        This verifies protocol completion, not that every requested word was said.
+        """
+        try:
+            pcm = await self._voice_take(text, reference)
+        except VoiceTakeIncomplete:
+            # Remove only our single, sentence-wide prefix, never user dialogue
+            # or arbitrary mid-sentence bracketed text. The voice reference stays.
+            plain = re.sub(r'\A<\|speaker:0\|> \[[^\[\]\r\n]+\] ', '', text, count=1)
+            if plain == text: raise
+            message = 'The expressive voice take did not finish. Retrying this sentence in natural delivery with the same voice.'
+            if on_notice is not None: await on_notice(message)
+            else: logger.warning(message)
+            pcm = await self._voice_take(plain, reference)
+        # Every final sample is retained; packets remain bounded for WebSocket.
+        for start in range(0, len(pcm), 16384):
+            yield pcm[start:start + 16384]
 
     async def close(self):
         await self.http.aclose(); self.stt.close()

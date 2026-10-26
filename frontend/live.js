@@ -130,13 +130,19 @@ function event(data){
   if(data.type==='error'){feedback(data.message);if(playback)playback.clear();resumeMicrophone();return;}
   if(data.type==='empty_transcript'){feedback('I did not catch that. Try again.');resumeMicrophone();return;}
   if(data.turn_id!==currentTurn)return;
+  if(data.type==='voice_notice'){feedback(data.message);return;}
   if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.text,'user');state($('director-enabled').checked?'Directing the next reply… · Mic paused':$('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
   if(data.type==='text_delta'){
     if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
     replies.get(currentTurn).content.textContent+=data.text;$('messages').scrollTop=$('messages').scrollHeight;
   }
   if(data.type==='phrase_done')playback.phraseDone(data.seq);
-  if(data.type==='response_done')playback.responseDone();
+  if(data.type==='response_done'){
+    if(data.partial&&replies.has(currentTurn)){
+      const reply=replies.get(currentTurn);reply.content.textContent=data.text;reply.node.classList.add('interrupted');
+    }
+    playback.responseDone();
+  }
   if(data.type==='metrics')$('timing').textContent=`Server to first audio: ${data.speech_end_to_first_audio_ms} ms · Recognition: ${data.stt_ms} ms · Director: ${data.director_ms??data.context_check_ms??0} ms · First text token: ${data.llm_first_token_ms} ms · Voice first chunk: ${data.tts_first_chunk_ms} ms`;
 }
 async function connect(useMic=true){
