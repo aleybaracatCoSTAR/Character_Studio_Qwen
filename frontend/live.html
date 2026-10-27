@@ -49,7 +49,7 @@
 <p id="director-model" class="hint small">Separate director call · shares the running Qwen model</p>
 </details>
 <input type="hidden" name="speaker" value="Chelsie"></form><p class="hint small">Character details stay in this browser. End the call to edit them.</p></aside>
-<section class="conversation" aria-label="Live character conversation"><div class="conversation-heading"><div><span class="eyebrow">VOICE REHEARSAL</span><h2 id="chat-title">Talk to Anna</h2></div><span class="live-badge">Live audio</span></div>
+<section class="conversation" aria-label="Live character conversation"><div class="conversation-heading"><div><span class="eyebrow">VOICE REHEARSAL</span><h2 id="chat-title">Talk to Anna</h2></div><div class="conversation-tools"><span class="live-badge">Live audio</span><button type="button" id="inspect-model" class="quiet" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-14-2 16"/></svg>See what the model sees</button></div></div>
 <p class="notice" id="mode-note">Checking speech recognition, the character model and Drama 3…</p>
 <section id="story-stage" aria-label="Narrative beats" hidden>
 <div class="story-heading"><strong id="story-title">Director script</strong><span id="story-clock" class="hint small"></span></div>
@@ -66,4 +66,13 @@
 <form id="typed-form" class="composer" hidden><label class="sr-only" for="typed-message">Message your character</label><textarea id="typed-message" rows="1" maxlength="2000" placeholder="Type a message…"></textarea><button id="send-text" class="primary" type="submit">Send ↑</button></form>
 <p class="hint small center">Mic waits during replies · Replies play as they arrive · Headphones recommended</p>
 <p class="attribution">Built with Fish Audio · Speech recognition → director → character actor → Drama 3 voice</p></div>
-</section></main></body></html>
+</section></main>
+<dialog id="model-inspector" aria-labelledby="inspection-title" aria-describedby="inspection-description">
+<div class="inspection-heading"><h2 id="inspection-title">What the model sees</h2><button type="button" id="close-inspector" class="secondary" aria-label="Close model request inspector">Close</button></div>
+<p id="inspection-description" class="hint">Actual requests from this call, updated while this window is open. Voice audio files and connection details are omitted.</p>
+<p id="inspection-empty" class="inspection-empty"></p>
+<div id="inspection-controls" class="inspection-controls" hidden><label>Captured request<select id="inspection-request"></select></label><button type="button" id="copy-inspection" class="secondary" disabled>Copy request JSON</button></div>
+<p id="inspection-status" class="hint small" role="status" aria-live="polite"></p>
+<div id="inspection-detail" hidden><p id="inspection-model" class="inspection-model"></p><div id="inspection-messages"></div><details id="inspection-raw"><summary>Request JSON</summary><pre id="inspection-json"></pre></details></div>
+</dialog>
+</body></html>

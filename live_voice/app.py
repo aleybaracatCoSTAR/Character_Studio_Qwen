@@ -71,6 +71,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
         health = {"stt":False,"llm":False,"tts":False} if preview else await services.health()
         return {"preview":preview,"ready":all(health.values()),"services":health,
                 "voice_pipeline":"responsive-context-v4",
+                "model_inspection":True,
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
                 "models":{"actor":deployment['actor']['id'],"director":(deployment['director'] or deployment['actor'])['id']},
@@ -146,7 +147,9 @@ def create_app(preview=False, providers=None, vad_factory=None):
                     if len(message["text"]) > 16000: raise ValueError("Control message too long.")
                     command = json.loads(message["text"])
                     if not isinstance(command, dict): raise ValueError("Invalid control message.")
-                    if command.get("type") == "played":
+                    if command.get("type") == "inspect":
+                        await session.inspection.subscribe(command.get('enabled'))
+                    elif command.get("type") == "played":
                         turn, sequence = command.get("turn_id"), command.get("seq")
                         if type(turn) is not int or type(sequence) is not int:
                             raise ValueError("Invalid playback acknowledgement.")

@@ -7,6 +7,7 @@ from .providers import OUTPUT_RATE, VoiceTakeIncomplete, synthetic_reference
 from .director import DirectorSettings
 from .narrative import NarrativeState
 from .recognition import PreparedRecognition
+from .inspection import RequestInspection
 from .voice import EMOTION_DIRECTIONS
 from .turns import ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
@@ -21,6 +22,7 @@ class LiveSession:
         self.send_json = send_json
         self.send_bytes = send_bytes
         self.history = ReplyHistory()
+        self.inspection = RequestInspection(send_json)
         self.prepared_recognition = PreparedRecognition(lambda pcm:self.providers.stt.transcribe(pcm))
         self.task = None
         self.turn_id = 0
@@ -107,6 +109,10 @@ class LiveSession:
             logger.warning("Story clock stopped (%s).",type(exc).__name__)
 
     async def check_story(self,key):
+        with self.inspection.scope(self.turn_id, phase='between_turns'):
+            await self._check_story(key)
+
+    async def _check_story(self,key):
         try:
             plan=await asyncio.wait_for(self.providers.direct(self.character,self.history.context_messages(budget=3000),'',
                 self.director,self.voice,self.trigger,self.trigger_active,self.last_plan,False,self.story.context()),
@@ -184,6 +190,10 @@ class LiveSession:
         return self.prepared_recognition.prepare(pcm)
 
     async def run(self, turn_id, pcm, text, endpoint_ms, action=False):
+        with self.inspection.scope(turn_id):
+            await self.run_turn(turn_id, pcm, text, endpoint_ms, action)
+
+    async def run_turn(self, turn_id, pcm, text, endpoint_ms, action=False):
         started = self.started
         metrics = {"endpoint_ms":endpoint_ms}
         try:
@@ -336,3 +346,4 @@ class LiveSession:
         if self.task:
             self.task.cancel(); await asyncio.gather(self.task, return_exceptions=True)
         await self.prepared_recognition.close()
+        self.inspection.close()

@@ -16,6 +16,7 @@ import numpy as np
 from studio.characters import system_prompt
 from .reactions import TriggerDecision, assessment_messages
 from .director import DirectorPlan, director_messages
+from .inspection import record_request
 
 OUTPUT_RATE = 44100
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ class LocalProviders:
         payload = {"model":self.llm_model, "messages":[{"role":"system", "content":prompt}] + history,
                    "stream":True, "max_tokens":160, "temperature":0.7,
                    "chat_template_kwargs":{"enable_thinking":False}}
+        await record_request('actor', payload)
         async with self.http.stream("POST", self.llm_url + "/v1/chat/completions", json=payload) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -152,6 +154,7 @@ class LocalProviders:
                    "response_format":{"type":"json_object"},
                    "messages":director_messages(character,history,latest,settings,voice,trigger,
                                                 active,previous,stage_action,narrative)}
+        await record_request('director', payload)
         response = await self.http.post(self.director_url + "/v1/chat/completions", json=payload, timeout=self.director_timeout)
         response.raise_for_status()
         return DirectorPlan.model_validate_json(response.json()["choices"][0]["message"]["content"])
@@ -162,6 +165,7 @@ class LocalProviders:
                    "response_format":{"type":"json_object"},
                    "messages":[{"role":"system","content":system},
                                {"role":"user","content":json.dumps(situation,ensure_ascii=False)}]}
+        await record_request('trigger', payload)
         response = await self.http.post(self.llm_url + "/v1/chat/completions", json=payload, timeout=4)
         response.raise_for_status()
         body = response.json()
@@ -174,6 +178,7 @@ class LocalProviders:
                    "max_new_tokens":speech_token_budget(text)}
         if reference:
             payload["ref_audio"], payload["ref_text"] = reference
+        await record_request('tts', payload)
         async with self.http.stream("POST", self.tts_url + "/v1/audio/speech", json=payload) as response:
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()

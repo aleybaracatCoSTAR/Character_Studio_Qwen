@@ -87,6 +87,8 @@ The complete actor reply goes to Drama 3 once, with one fixed delivery cue. It i
 
 ### Conversation context
 
+To inspect the actual input used for a reply, choose **See what the model sees** beside the conversation title. Select the actor, director, emotion-check or voice request and copy its JSON. Character facts, applied notes, conversation history and TTS delivery cues are visible; reference audio itself is omitted. See [the viewer guide](MODEL_INPUTS.md). The window receives updates only while open, and its snapshots clear when the session ends.
+
 During an active call, the app keeps the latest **12 user/assistant pairs** and a RAM archive bounded to **100 turns or 100,000 characters**. When a new question relates to older material, a small lexical search can return up to **three older original quote pairs**, alongside recent dialogue. It does not generate a summary or invent replacement facts. Retrieval can miss paraphrases or select an unhelpful match; these bounds do not guarantee perfect recall or character consistency.
 
 Conversation content is limited to **10,000 characters for the actor**, **3,000 for story-aware director requests** and **6,000 for ordinary director requests**. Those are conversation budgets, separate from character and instruction text. Only acknowledged, fully played AI replies enter assistant memory; generated but unheard replies do not. A private stage cue can direct its current turn but is excluded from later participant recall; the AI speech that follows it can be retained once played. This memory belongs to the current call only: there is no cross-session retention, disk transcript or additional summary model.

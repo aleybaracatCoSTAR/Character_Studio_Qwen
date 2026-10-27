@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from live_voice.app import create_app
+from live_voice.inspection import record_request
 from live_voice.director import DirectorSettings, DirectorPlan, director_messages
 from live_voice.providers import LocalProviders, VoiceTakeIncomplete, speech_token_budget
 from live_voice.session import LiveSession
@@ -504,6 +505,53 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LiveAPITests(unittest.TestCase):
+    def test_prompt_inspector_subscribes_to_real_turn_scope_and_clears_with_a_new_call(self):
+        providers = FakeProviders()
+        payload = {'model':'test-actor', 'messages':[{'role':'system','content':'Stay a washing machine.'},
+                                                     {'role':'user','content':'Hello, Anna.'}]}
+        async def text(character, history):
+            await record_request('actor', payload)
+            yield 'Hello, visitor.'
+        providers.text = text
+        with TestClient(create_app(providers=providers, vad_factory=lambda:TurnDetector(lambda frame:False))) as client:
+            self.assertTrue(client.get('/api/status').json()['model_inspection'])
+            with client.websocket_connect('/api/live', headers={'origin':'http://testserver'}) as socket:
+                socket.send_json({'type':'start','character':example().model_dump()})
+                self.assertEqual(socket.receive_json()['type'], 'ready')
+                socket.send_json({'type':'text','text':'Hello, Anna.'})
+                events = []
+                while True:
+                    message = socket.receive()
+                    if not message.get('text'): continue
+                    event = json.loads(message['text']); events.append(event)
+                    if event['type'] == 'response_done': break
+                self.assertFalse(any(event['type']=='model_inspection' for event in events))
+                socket.send_json({'type':'inspect','enabled':True})
+                captured = socket.receive_json()
+                self.assertEqual(captured['type'], 'model_inspection')
+                self.assertEqual(len(captured['requests']),1)
+                self.assertEqual(captured['requests'][0]['turn_id'],1)
+                self.assertEqual(captured['requests'][0]['payload'],payload)
+                socket.send_json({'type':'inspect','enabled':False})
+                socket.send_json({'type':'text','text':'Another question.'})
+                events = []
+                while True:
+                    message = socket.receive()
+                    if not message.get('text'): continue
+                    event = json.loads(message['text']); events.append(event)
+                    if event['type'] == 'response_done': break
+                self.assertFalse(any(event['type']=='model_inspection' for event in events))
+                socket.send_json({'type':'inspect','enabled':True})
+                self.assertEqual(len(socket.receive_json()['requests']),2)
+                socket.send_json({'type':'stop'})
+                with self.assertRaises(WebSocketDisconnect): socket.receive_json()
+            with client.websocket_connect('/api/live', headers={'origin':'http://testserver'}) as socket:
+                socket.send_json({'type':'start','character':example().model_dump()})
+                self.assertEqual(socket.receive_json()['type'], 'ready')
+                socket.send_json({'type':'inspect','enabled':True})
+                self.assertEqual(socket.receive_json(),{'type':'model_inspection','requests':[]})
+                socket.send_json({'type':'stop'})
+
     def test_muting_capture_does_not_cancel_recognition_of_a_finalized_turn(self):
         providers = FakeProviders()
         started, release = threading.Event(), threading.Event()

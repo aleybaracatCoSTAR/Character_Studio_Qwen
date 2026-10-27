@@ -1,6 +1,7 @@
 import {StreamResampler,pcm16,PCMPlayback} from './live-audio.mjs';
 import {Conversation} from './live-transcript.mjs';
 import {StoryEditor} from './live-story.mjs';
+import {PromptInspector} from './live-inspector.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 let socket=null,context=null,stream=null,capture=null,playback=null,connecting=false,muted=false,ready=false,currentTurn=0;
@@ -9,6 +10,7 @@ let referenceURL=null;
 let triggerActive=false;
 let sessionReady=false,disconnecting=null;
 const conversation=new Conversation($('messages'),$('empty-state'));
+const inspector=new PromptInspector({document,send});
 function directorSettings(){return {enabled:$('director-enabled').checked,notes:$('director-input').value};}
 function triggerSettings(){return $('trigger-enabled').checked?{
   action:$('trigger-action').value,condition:$('trigger-condition').value,emotion:$('trigger-emotion').value,
@@ -92,6 +94,7 @@ async function disconnect(){
   if(disconnecting)return disconnecting;
   const previous=socket,oldContext=context,oldStream=stream,oldCapture=capture,oldPlayback=playback;
   socket=null;context=null;stream=null;capture=null;playback=null;connecting=true;
+  inspector.setConnected(false);
   clearTimeout(resumeTimer);replyPending=false;sessionReady=false;triggerActive=false;controls();
   $('trigger-state').textContent='Start a call to test the reaction.';
   if(previous){if(previous.readyState===WebSocket.OPEN)previous.send(JSON.stringify({type:'stop'}));previous.close();}
@@ -103,6 +106,7 @@ async function disconnect(){
   return disconnecting;
 }
 function event(data){
+  if(data.type==='model_inspection'){inspector.accept(data);return;}
   if(data.type==='story_state'){renderStory(data);return;}
   if(data.type==='story_decision'){$('story-reason').textContent=`Director held this beat: ${data.reason}`;return;}
   if(data.type==='director_ack'){feedback(data.message);return;}
@@ -119,7 +123,7 @@ function event(data){
     else if(data.action==='hold')$('trigger-state').textContent=(triggerActive?'Reaction continues':'Normal state')+(data.evidence?` · ${data.evidence}`:'');
     state('Thinking… · Mic paused');return;
   }
-  if(data.type==='ready'){sessionReady=true;state(stream?'Listening…':'Ready for a typed message');controls();return;}
+  if(data.type==='ready'){sessionReady=true;inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
   if(data.type==='turn_start'){holdMicrophone();currentTurn=data.turn_id;playback.setTurn(currentTurn);state('Understanding… · Mic paused');return;}
@@ -154,7 +158,7 @@ async function connect(useMic=true){
   }
   connecting=true;feedback();controls();
   try{
-    conversation.reset();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
+    conversation.reset();inspector.reset();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}
@@ -241,7 +245,7 @@ for(const id of ['director-enabled','director-input'])$(id).addEventListener('ch
 });
 async function status(){
   try{
-    const response=await fetch('/api/status'),data=await response.json();ready=data.ready;
+    const response=await fetch('/api/status'),data=await response.json();ready=data.ready;inspector.setSupported(data.model_inspection===true);
     $('status').textContent=data.preview?'Design preview':ready?'Voice services ready':'Services starting…';$('status').className=ready?'ready':'';
     $('mode-note').textContent=data.preview?'Design preview. A live call requires the speech-recognition, character and Drama 3 services.':ready?'Speak and pause to hear a reply. Your mic waits until the answer finishes. Use Stop reply to take over.':data.stt_error||Object.entries(data.services).map(([name,ok])=>`${name.toUpperCase()}: ${ok?'ready':'not ready'}`).join(' · ');
     if(data.busy&&!socket){ready=false;$('mode-note').textContent='Another voice session is active. End that call before starting a new one.';}
