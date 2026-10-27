@@ -128,7 +128,7 @@ class LocalProviders:
         return health
 
     async def text(self, character, history):
-        prompt = system_prompt(character) + "\n\nFor this voice call, reply in at most three short sentences. Use plain spoken words. Do not include bracketed delivery tags, markdown or stage directions."
+        prompt = system_prompt(character) + "\n\nFor this voice call, reply in at most three short sentences. Use plain spoken words. Use the heard conversation, including earlier details relevant to the current question; later corrections replace earlier claims. Do not invent a memory when the conversation does not contain it. Do not include bracketed delivery tags, markdown or stage directions."
         payload = {"model":self.llm_model, "messages":[{"role":"system", "content":prompt}] + history,
                    "stream":True, "max_tokens":160, "temperature":0.7,
                    "chat_template_kwargs":{"enable_thinking":False}}

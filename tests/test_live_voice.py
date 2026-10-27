@@ -3,6 +3,7 @@ import base64
 from io import BytesIO
 import json
 import struct
+import threading
 import unittest
 import wave
 
@@ -77,8 +78,8 @@ class TurnTests(unittest.TestCase):
         detector=self.detector(); actual=[]
         for start in range(0,len(audio),218): actual.extend(detector.feed(audio[start:start+218]))
         self.assertEqual(actual,expected)
-        self.assertEqual([x[0] for x in actual],["start","utterance"])
-        self.assertEqual(actual[-1][2],480)
+        self.assertEqual([x[0] for x in actual],["start","prepare","utterance"])
+        self.assertEqual(actual[-1][2],400)
 
     def test_silence_and_short_noise_do_not_produce_user_turns(self):
         detector=self.detector()
@@ -127,7 +128,7 @@ class TurnTests(unittest.TestCase):
     def test_history_keeps_complete_pairs_bounded(self):
         history=ReplyHistory()
         for turn in range(20): history.begin(turn,str(turn))
-        self.assertEqual(len(history.messages),12)
+        self.assertEqual(len(history.messages),24)
         self.assertEqual(history.messages[0]["role"],"user")
 
 
@@ -503,10 +504,44 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LiveAPITests(unittest.TestCase):
+    def test_muting_capture_does_not_cancel_recognition_of_a_finalized_turn(self):
+        providers = FakeProviders()
+        started, release = threading.Event(), threading.Event()
+        calls = []
+        async def recognize(pcm):
+            calls.append(pcm); started.set()
+            while not release.is_set(): await asyncio.sleep(.001)
+            return 'Hello, Anna.'
+        providers.stt.transcribe = recognize
+        app = create_app(providers=providers, vad_factory=lambda:TurnDetector(lambda frame:frame[:2] == b'\x01\x00'))
+        with TestClient(app) as client:
+            with client.websocket_connect('/api/live', headers={'origin':'http://testserver'}) as socket:
+                socket.send_json({'type':'start','character':example().model_dump()})
+                self.assertEqual(socket.receive_json()['endpoint_ms'], 400)
+                audio = frames(True,20) + frames(False,20)
+                for offset in range(0,len(audio),FRAME_BYTES*4):
+                    socket.send_bytes(audio[offset:offset+FRAME_BYTES*4])
+                while socket.receive_json()['type'] != 'turn_start': pass
+                self.assertTrue(started.wait(1))
+                socket.send_json({'type':'mute'})
+                socket.send_json({'type':'director','settings':{'enabled':False}})
+                self.assertEqual(socket.receive_json()['type'], 'director_ack')
+                release.set()
+                events = []
+                while True:
+                    message = socket.receive()
+                    if not message.get('text'): continue
+                    event = json.loads(message['text']); events.append(event)
+                    if event['type'] in ('error','response_done'): break
+                self.assertEqual(events[-1]['type'],'response_done')
+                self.assertEqual([event['text'] for event in events if event['type']=='transcript'], ['Hello, Anna.'])
+                self.assertEqual(len(calls),1)
+                socket.send_json({'type':'stop'})
+
     def test_status_identifies_the_loaded_voice_pipeline(self):
         app=create_app(preview=True,providers=FakeProviders())
         with TestClient(app) as client:
-            self.assertEqual(client.get('/api/status').json()['voice_pipeline'],'reply-locked-v3')
+            self.assertEqual(client.get('/api/status').json()['voice_pipeline'],'responsive-context-v4')
 
     def test_live_delivery_and_trigger_controls_reach_the_next_answer(self):
         providers=FakeProviders()

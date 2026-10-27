@@ -50,6 +50,7 @@ These settings route requests only. They do not download, start, allocate GPU me
 
 - Director output must match `DirectorPlan`; malformed JSON, unknown emotions and extra keys are rejected.
 - The compact profile uses a six-second HTTP timeout and 6.5-second outer deadline; quality profiles use 12/12.5 seconds. `LIVE_DIRECTOR_TIMEOUT` can override it. It adds a sequential planning step before first actor tokens. Measure the latency; it is not free.
+- Current-call memory supplies up to twelve recent exchanges plus relevant older original quotes from a bounded RAM archive. The director receives at most 6,000 context characters, or 3,000 when the separate current-beat context is present. It preserves recalled older evidence. The actor receives its own bounded context; no additional LLM summarization request is added. Short intentions and delivery notes are requested to reduce unnecessary planning output, with no measured latency claim.
 - On failure the page reports it, keeps the current trigger state and continues with the actor. It does not substitute keyword matching.
 - Active trigger emotion and vocal direction override the general director suggestion; the displayed note shows the delivery actually applied to TTS. Manual stage actions remain authoritative.
 - Disabling the director restores the existing trigger-only assessment when a trigger is configured.

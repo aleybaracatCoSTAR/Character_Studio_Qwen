@@ -6,6 +6,8 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 
 **The live mode now includes [narrative beats and performer controls](docs/NARRATIVE.md), plus [two-/three-GPU quality profiles](docs/MULTI_GPU.md).** The [director orchestrator](docs/DIRECTOR.md) works as follows: a backstage LLM plans each reply’s intention and vocal delivery, Qwen acts the character, and Drama 3 speaks. The director defaults to a separate call to the existing Qwen server; a different running LLM endpoint can be configured. The sidebar includes Female/Male reference voices, custom WAV upload, vocal emotion and an editable emotional trigger. Anna's example is **Press reset → Anxious → fear of losing memories**. The microphone waits during replies; use **Stop reply** to take over. [Preview the trigger editor](docs/screenshots/contextual-reaction-preview.jpg). Triggers now use a local-model contextual decision rather than exact wording. Vocal direction is fixed for a complete reply, synthesized as one continuous take without a natural-delivery fallback; the new director and audible performance still need a live listening test. The earlier trigger-only check scored 11/12 on its small diagnostic set; see [verification](docs/DIRECTOR.md#verification).
 
+**Response timing and conversation context:** the live app now waits 400 ms of silence, starts recognition provisionally at 200 ms and reuses it only when the final audio matches exactly. Microphone packets are 40 ms. It sends twelve recent exchanges plus relevant older quotes to the character, with a bounded RAM archive for the current call. Ending the call clears that memory. Whole-reply emotional direction and voice validation are preserved. See [timing and memory details](docs/LIVE_SETUP.md); actual GPU latency improvement has not yet been measured.
+
 **Status: starter prototype.** CPU transport tests and browser checks pass. A short standalone Drama 3 synthesis succeeded on Surrey through the Mac SSH tunnel on 23 October 2026; [details](experiments/drama3/README.md#validation). The full live stack, combined H200 memory use, spoken quality and live response time still need validation. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
 
 ![Character sheet and conversation preview](docs/screenshots/studio-preview.jpg)
@@ -53,6 +55,7 @@ Follow **[the Surrey guide](docs/SURREY.md)**. The starting target is one alloca
 | `studio/audio.py` | WAV validation, resampling and reply encoding |
 | `characters/anna.json` | Example character |
 | `live_voice/` | Continuous-mic app, turn detection, local providers and interruption |
+| `live_voice/recognition.py`, `live_voice/turns.py` | Safe recognition preparation and bounded active-call conversation memory |
 | `frontend/live.*`, `frontend/live-audio.mjs` | Live call page, controls and streamed PCM playback |
 | `scripts/run_live_stack.sh` | Start the live app and both model servers |
 | `scripts/` | Environment setup, model download and launch |
@@ -72,11 +75,11 @@ Read [architecture](docs/ARCHITECTURE.md) for the request flow and [handoff note
 node --check frontend/app.js
 node --check frontend/recorder-worklet.js
 node --input-type=module --check < frontend/live.js
-node --test tests/live_audio.test.mjs
+node --test tests/live_audio.test.mjs tests/live_capture.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-67 Python tests and eight JavaScript audio tests exercise app contracts, protected turn-taking, streamed provider responses, cancellation, playback acknowledgements, bounded voice references, delivery tags, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
+183 Python tests and 16 JavaScript audio tests exercise app contracts, protected turn-taking, provisional recognition, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, bounded voice references, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

@@ -34,6 +34,7 @@ def director_messages(character, history, latest, settings, voice, trigger=None,
                       active=False, previous=None, stage_action=False, narrative=None):
     system = '''You direct an improvised voice character. You are backstage, not the speaking character.
 Return a short intention for the ACTOR and a playable vocal direction for the TTS performer.
+Keep intention to at most 14 words and delivery to at most 8 words. Leave evidence empty for hold/no completed beat; otherwise quote only the necessary words.
 Use the fixed character facts, latest utterance and HEARD conversation. Character biography is background, not a speech to repeat.
 Answer the current question first. Advance the conversation through ONE specific next move: a practical request, observation, small choice, or relevant question.
 Accept reassurance and support: let the character respond differently, rather than endlessly re-stating a fear or goal.
@@ -59,12 +60,14 @@ Return ONLY JSON with exactly these keys, no markdown or reasoning trace:
 "delivery":"concrete vocal performance, <=200 characters","event":"none|sigh|laugh",
 "trigger_action":"activate|release|hold","evidence":"short evidence from the conversation, <=240 characters",
 "beat_done":false,"beat_evidence":"short verbatim quotation showing this beat happened, or empty"}.'''
-    recent = [{"role":m["role"], "content":m["content"]} for m in history[-12:] if m.get("content", "").strip()]
-    # Bound large imported histories while keeping the newest heard exchanges intact.
+    recent = [{"role":m["role"], "content":m["content"]} for m in history if m.get("content", "").strip()]
+    # ReplyHistory already selects a bounded mix of recent and relevant older
+    # exchanges. Do not slice it to six pairs and silently drop recalled facts.
+    # Still bound arbitrary/manual callers to the same character budget.
     budget = 3000 if narrative else 6000
     bounded = []
     for message in reversed(recent):
-        value = message["content"][-min(2000, budget):]
+        value = message["content"][-budget:]
         bounded.append({**message, "content":value}); budget -= len(value)
         if budget <= 0: break
     situation = {
@@ -75,4 +78,4 @@ Return ONLY JSON with exactly these keys, no markdown or reasoning trace:
         "trigger":trigger.model_dump() if trigger else None, "trigger_active":active,
         "previous_intention":previous.intention if previous else None, "narrative":narrative,
     }
-    return [{"role":"system", "content":system}, {"role":"user", "content":json.dumps(situation, ensure_ascii=False)}]
+    return [{"role":"system", "content":system}, {"role":"user", "content":json.dumps(situation, ensure_ascii=False, separators=(',', ':'))}]

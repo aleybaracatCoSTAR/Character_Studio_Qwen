@@ -70,7 +70,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
     async def status():
         health = {"stt":False,"llm":False,"tts":False} if preview else await services.health()
         return {"preview":preview,"ready":all(health.values()),"services":health,
-                "voice_pipeline":"reply-locked-v3",
+                "voice_pipeline":"responsive-context-v4",
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
                 "models":{"actor":deployment['actor']['id'],"director":(deployment['director'] or deployment['actor'])['id']},
@@ -118,7 +118,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
             def clear_microphone():
                 detector.pending.clear(); detector.reset()
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
-                             "endpoint_ms":480, "turn_taking":"Stop reply to interrupt; mic resumes after playback",
+                             "endpoint_ms":detector.silence_frames * 20, "turn_taking":"Stop reply to interrupt; mic resumes after playback",
                              "voice":"uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated reply anchors this call"})
             await session.start_story()
             while True:
@@ -135,6 +135,8 @@ def create_app(preview=False, providers=None, vad_factory=None):
                     for event, pcm, endpoint_ms in detector.feed(packet):
                         if event == "start":
                             await send_json({"type":"speech_start"})
+                        elif event == "prepare":
+                            session.prepare_recognition(pcm)
                         elif event == "utterance":
                             await session.begin(pcm=pcm, endpoint_ms=endpoint_ms)
                             clear_microphone()
@@ -162,6 +164,8 @@ def create_app(preview=False, providers=None, vad_factory=None):
                         await session.begin(text=text.strip())
                     elif command.get("type") == "mute":
                         clear_microphone()
+                        # Muting capture must not cancel a finalized turn's ASR.
+                        if not session.reply_pending: await session.prepared_recognition.clear()
                     elif command.get("type") == "delivery":
                         delivery = Delivery.model_validate(command.get("settings"))
                         session.voice = session.voice.model_copy(update=delivery.model_dump())
@@ -178,6 +182,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
                         await session.trigger_state(False)
                     elif command.get("type") == "interrupt":
                         await session.interrupt()
+                        await session.prepared_recognition.clear()
                         clear_microphone()
                         listen_after = time.monotonic() + 0.35
                     elif command.get("type") == "stop": break

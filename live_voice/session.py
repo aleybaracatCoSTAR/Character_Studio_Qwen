@@ -6,6 +6,7 @@ import time
 from .providers import OUTPUT_RATE, VoiceTakeIncomplete, synthetic_reference
 from .director import DirectorSettings
 from .narrative import NarrativeState
+from .recognition import PreparedRecognition
 from .voice import EMOTION_DIRECTIONS
 from .turns import ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
@@ -20,6 +21,7 @@ class LiveSession:
         self.send_json = send_json
         self.send_bytes = send_bytes
         self.history = ReplyHistory()
+        self.prepared_recognition = PreparedRecognition(lambda pcm:self.providers.stt.transcribe(pcm))
         self.task = None
         self.turn_id = 0
         self.voice = voice or VoiceSettings()
@@ -106,7 +108,7 @@ class LiveSession:
 
     async def check_story(self,key):
         try:
-            plan=await asyncio.wait_for(self.providers.direct(self.character,self.history.messages,'',
+            plan=await asyncio.wait_for(self.providers.direct(self.character,self.history.context_messages(budget=3000),'',
                 self.director,self.voice,self.trigger,self.trigger_active,self.last_plan,False,self.story.context()),
                 getattr(self.providers,'director_timeout',6)+0.5)
             if (self.story.revision!=key[0] or self.reply_pending or self.story.paused_at is not None
@@ -165,6 +167,7 @@ class LiveSession:
         if self.story_director_task and not self.story_director_task.done():
             self.story_director_task.cancel();await asyncio.gather(self.story_director_task,return_exceptions=True)
         await self.interrupt()
+        if text is not None: await self.prepared_recognition.clear()
         await self.story_boundary()
         self.turn_id += 1
         turn_id = self.turn_id
@@ -175,24 +178,38 @@ class LiveSession:
         self.started = time.perf_counter() - endpoint_ms / 1000
         self.task = asyncio.create_task(self.run(turn_id, pcm, text, endpoint_ms, action))
 
+    def prepare_recognition(self, pcm):
+        """Prepare a pause without publishing a transcript or starting a reply."""
+        if self.reply_pending: return False
+        return self.prepared_recognition.prepare(pcm)
+
     async def run(self, turn_id, pcm, text, endpoint_ms, action=False):
         started = self.started
         metrics = {"endpoint_ms":endpoint_ms}
         try:
             await self.send_json({"type":"turn_start", "turn_id":turn_id})
             now = time.perf_counter()
-            if text is None: text = await self.providers.stt.transcribe(pcm)
+            if text is None:
+                text = await self.prepared_recognition.transcribe(pcm)
+                metrics["recognition_prepared"] = self.prepared_recognition.last_reused
             metrics["stt_ms"] = round((time.perf_counter() - now) * 1000)
             if not text or not text.strip():
                 self.reply_pending = False
                 await self.send_json({"type":"empty_transcript", "turn_id":turn_id}); return
+            # Register finalized participant words before planning can be stopped.
+            # The director gets prior context plus latest separately, while the
+            # actor later gets the current utterance exactly once from history.
+            director_context = self.history.context_messages(latest=text, budget=3000 if self.story.active else 6000)
+            trigger_context = (self.history.context_messages(latest=text, budget=6000)
+                               if self.trigger and not self.director.enabled else None)
+            self.history.begin(turn_id, text, source='stage' if action else 'participant')
             await self.send_json({"type":"transcript", "turn_id":turn_id, "text":text, "source":"action" if action else "speech"})
             plan = None
             if self.director.enabled:
                 check_started = time.perf_counter()
                 try:
                     plan = await asyncio.wait_for(self.providers.direct(
-                        self.character,self.history.messages,text,self.director,self.voice,
+                        self.character,director_context,text,self.director,self.voice,
                         self.trigger,self.trigger_active,self.last_plan,action,self.story.context()),
                         getattr(self.providers,"director_timeout",6)+0.5)
                     metrics["director_ms"] = round((time.perf_counter()-check_started)*1000)
@@ -223,7 +240,7 @@ class LiveSession:
                 check_started = time.perf_counter()
                 try:
                     decision = await asyncio.wait_for(
-                        self.providers.assess_trigger(self.character,self.trigger,self.history.messages,text,self.trigger_active),4.5)
+                        self.providers.assess_trigger(self.character,self.trigger,trigger_context,text,self.trigger_active),4.5)
                     metrics["context_check_ms"] = round((time.perf_counter()-check_started)*1000)
                     if decision.action == "activate":
                         await self.trigger_state(True, decision.evidence, source="context")
@@ -261,13 +278,13 @@ class LiveSession:
                 target = target.model_copy(update={"beat":target.beat + "\n\n" + self.story.runtime_note()})
             if plan:
                 target = target.model_copy(update={"beat":target.beat + "\n\n" + plan.actor_note()})
-            self.history.begin(turn_id, text)
             answer = []
             llm_started = time.perf_counter()
             async for delta in self.providers.text(target, self.history.prompt_messages()):
                 if not answer: metrics["llm_first_token_ms"] = round((time.perf_counter() - llm_started) * 1000)
                 answer.append(delta)
                 await self.send_json({"type":"text_delta", "turn_id":turn_id, "text":delta})
+            metrics["llm_total_ms"] = round((time.perf_counter() - llm_started) * 1000)
             reply = "".join(answer).strip()
             if not reply: raise RuntimeError("The text model returned no spoken reply.")
 
@@ -318,3 +335,4 @@ class LiveSession:
             self.story_task.cancel();await asyncio.gather(self.story_task,return_exceptions=True)
         if self.task:
             self.task.cancel(); await asyncio.gather(self.task, return_exceptions=True)
+        await self.prepared_recognition.close()

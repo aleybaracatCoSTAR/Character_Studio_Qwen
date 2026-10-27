@@ -1,5 +1,5 @@
 class LiveCapture extends AudioWorkletProcessor {
-  constructor(){super();this.size=Math.round(sampleRate*.08);this.buffer=new Float32Array(this.size);this.offset=0;}
+  constructor(){super();this.size=Math.round(sampleRate*.04);this.buffer=new Float32Array(this.size);this.offset=0;}
   process(inputs){
     const channels=inputs[0];if(!channels?.length)return true;
     for(let i=0;i<channels[0].length;i++){

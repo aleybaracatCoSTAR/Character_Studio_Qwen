@@ -144,7 +144,7 @@ function event(data){
     }
     playback.responseDone();
   }
-  if(data.type==='metrics')$('timing').textContent=`Server to first audio: ${data.speech_end_to_first_audio_ms} ms · Recognition: ${data.stt_ms} ms · Director: ${data.director_ms??data.context_check_ms??0} ms · First text token: ${data.llm_first_token_ms} ms · Voice first chunk: ${data.tts_first_chunk_ms} ms`;
+  if(data.type==='metrics')$('timing').textContent=`Server estimate to first audio: ${data.speech_end_to_first_audio_ms} ms · Final pause: ${data.endpoint_ms} ms · Recognition wait: ${data.stt_ms} ms${data.recognition_prepared?' (started during pause)':''} · Director: ${data.director_ms??data.context_check_ms??0} ms · Reply text: ${data.llm_total_ms??data.llm_first_token_ms} ms · Complete voice take: ${data.tts_first_chunk_ms} ms`;
 }
 async function connect(useMic=true){
   if(connecting)return;if(socket){await disconnect();return;}if(!form.reportValidity())return;

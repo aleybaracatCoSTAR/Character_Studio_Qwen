@@ -35,6 +35,6 @@ GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull
 bash scripts/run_live_stack.sh --profile quality-3gpu
 ```
 
-No `--prepare` or model download is needed for this code change. Refresh the browser. The running `/api/status` should include `"voice_pipeline":"reply-locked-v3"`; a newer static file alone does not confirm that the Python process was restarted. Test typed playback first, listen to all sentences as one take, then change emotion between replies and check Stop reply.
+No `--prepare` or model download is needed for this code change. Refresh the browser. The running `/api/status` should include `"voice_pipeline":"responsive-context-v4"` (the v3 whole-reply policy plus recognition preparation and conversation context); a newer static file alone does not confirm that the Python process was restarted. Test typed playback first, listen to all sentences as one take, then change emotion between replies and check Stop reply. No live listening check of v4 has been performed.
 
 Relevant files: `live_voice/voice.py`, `turns.py`, `providers.py`, `session.py`, `director.py`, `frontend/live.js`, `tests/test_phrase_chunker.py` and `tests/test_voice_generation.py`.
