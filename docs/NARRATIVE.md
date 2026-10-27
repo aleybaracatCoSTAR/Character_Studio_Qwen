@@ -9,10 +9,10 @@ This iteration brings the pattern of the developer's `ArcDirector` in `orchestra
 1. Open **Director script**. Enable **Follow narrative beats** and **Guide each reply**.
 2. Load **Anna example**, or edit/add/remove beats. One beat editor opens at a time by default. Edit the title, goal, private entry note, feeling, vocal direction and minimum/maximum seconds. The script supports 1–12 beats; Anna has five.
 3. Choose advancement: **Director** (evidence with a time-limit fallback), **Time limits only**, or **Performer only**. Start a call.
-4. The main view shows the current beat, progress dots, elapsed time and why it changed. Expand **Beat goal & entry note** to inspect its private context.
+4. A compact row shows the current beat. Choose **Show director controls** to expand progress, timing, performer buttons and the latest director note; choose **Hide director controls** to restore transcript space. It starts collapsed, and incoming updates preserve your choice. Inside the panel, expand **Beat goal & entry note** to inspect its private context.
 5. Use **Hold** to pause automatic progression; **Resume** restores the clock. **Next beat** and **Previous** are performer overrides. During a reply a requested move is queued until playback finishes. On the last beat, Next becomes **Finish story**.
 6. Send **Direction for this scene** at any time. It is a private instruction, applied to the next answer even when the LLM director is disabled. It does not replace saved character facts.
-7. **Cue character** explicitly asks for an in-world response to the current beat without waiting for a visitor question. Beat changes alone update the situation; they do not interrupt playback or automatically start speech.
+7. Entering a new beat now starts one in-world character reply without requiring another visitor question. This applies to performer moves, timer moves, between-turn director advances and restarting the arc. Queued moves wait until current playback finishes. A participant reply that advances the beat itself serves as that beat's response, so a second voice is not started. **Cue character** remains available to explicitly rehearse the current situation again.
 
 Finishing the story marks the arc complete; it does not cancel the call or the Slurm allocation. The character can say farewell naturally. End the call to edit the outline. Script edits are saved in this browser and a fresh call starts from beat one.
 
@@ -49,7 +49,11 @@ The server only accepts an LLM completion after the minimum time, while not held
 
 Generated but unplayed actor text is not evidence. Completed browser playback acknowledgements enter heard history; private stage cues are excluded from the participant's heard utterances. Evidence from a previous beat is cleared on entry to the next. A director decision arriving after a beat change is discarded. New participant turns cancel pending between-turn checks.
 
-A one-second clock checks timeouts; state updates are sent every five seconds and on transitions. Automatic moves wait while an answer is generating or playing. Hold freezes the clock and blocks model-driven completion, but permits conversation and deliberate performer moves. **Stop reply** remains the explicit way to interrupt audio.
+A one-second clock checks timeouts; state updates are sent every five seconds and on transitions. Automatic moves wait while a participant is speaking or an answer is generating or playing. Playback acknowledgement can dispatch an already queued move immediately. Hold freezes the clock and blocks model-driven completion, but permits conversation and deliberate performer moves. Invalid moves, hold/resume and finishing the final beat do not invent a new entry reply. **Stop reply** remains the explicit way to interrupt audio.
+
+Entry replies are keyed to the story revision and reserved once. Cancelling a background check cannot start a stale cue after another move, story completion or call closure; a participant who starts speaking defers the cue. Private entry prompts stay out of later participant memory. A failed voice take does not create an infinite automatic entry-reply loop; use **Retry voice** to regenerate the saved spoken reply, or **Cue character** to create a new response.
+
+![Director controls collapsed in the local design preview](screenshots/director-collapsed-preview.png)
 
 ## Files and protocol
 

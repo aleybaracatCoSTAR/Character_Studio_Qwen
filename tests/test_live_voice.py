@@ -505,6 +505,71 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LiveAPITests(unittest.TestCase):
+    def test_websocket_retries_only_the_voice_of_the_failed_turn(self):
+        providers = FakeProviders(); attempts = []
+        async def audio(text, reference=None, on_notice=None):
+            attempts.append((text, reference))
+            if len(attempts) == 1: raise VoiceTakeIncomplete('Unfinished test voice')
+            yield b'\x01\x00' * 100
+        providers.audio = audio
+        with TestClient(create_app(providers=providers, vad_factory=lambda:TurnDetector(lambda frame:False))) as client:
+            self.assertTrue(client.get('/api/status').json()['voice_retry'])
+            with client.websocket_connect('/api/live', headers={'origin':'http://testserver'}) as socket:
+                socket.send_json({'type':'start', 'character':example().model_dump()})
+                self.assertEqual(socket.receive_json()['type'], 'ready')
+                socket.send_json({'type':'text', 'text':'Hello, Anna.'})
+                while True:
+                    event = socket.receive_json()
+                    if event['type']=='error': break
+                self.assertTrue(event['can_retry_voice'])
+                socket.send_json({'type':'retry_voice', 'turn_id':1})
+                events = []
+                while True:
+                    message = socket.receive()
+                    if not message.get('text'): continue
+                    event = json.loads(message['text']); events.append(event)
+                    if event['type']=='response_done': break
+                self.assertEqual(events[0], {'type':'turn_start','turn_id':1,'voice_retry':True})
+                self.assertFalse(any(event['type'] in ('transcript','text_delta') for event in events))
+                self.assertEqual(len(providers.characters),1)
+                self.assertEqual(attempts[0],attempts[1])
+                socket.send_json({'type':'retry_voice', 'turn_id':0})
+                self.assertEqual(socket.receive_json()['type'],'voice_retry_unavailable')
+                socket.send_json({'type':'stop'})
+
+    def test_playback_ack_dispatches_a_queued_new_beat_without_another_participant_message(self):
+        providers = FakeProviders()
+        story = {'enabled':True,'mode':'manual','beats':[
+            {'title':'Meet','goal':'Meet the visitor.','min_seconds':0,'max_seconds':30},
+            {'title':'Trust','goal':'Invite help.','min_seconds':0,'max_seconds':30}]}
+        with TestClient(create_app(providers=providers, vad_factory=lambda:TurnDetector(lambda frame:False))) as client:
+            self.assertTrue(client.get('/api/status').json()['beat_entry_replies'])
+            with client.websocket_connect('/api/live', headers={'origin':'http://testserver'}) as socket:
+                socket.send_json({'type':'start','character':example().model_dump(),'narrative':story})
+                self.assertEqual(socket.receive_json()['type'],'ready')
+                self.assertEqual(socket.receive_json()['index'],0)
+                socket.send_json({'type':'text','text':'Hello'})
+                while True:
+                    message = socket.receive()
+                    if message.get('text') and json.loads(message['text'])['type']=='response_done': break
+                socket.send_json({'type':'story','control':{'action':'next'}})
+                queued = socket.receive_json()
+                self.assertEqual((queued['index'],queued['pending']), (0,'next'))
+                socket.send_json({'type':'played','turn_id':1,'seq':0})
+                socket.send_json({'type':'playback_done','turn_id':1})
+                events = []
+                while True:
+                    message = socket.receive()
+                    if not message.get('text'): continue
+                    event = json.loads(message['text']); events.append(event)
+                    if event['type']=='response_done': break
+                self.assertEqual(events[0]['type'],'story_state')
+                self.assertEqual(events[0]['index'],1)
+                self.assertEqual([event['turn_id'] for event in events if event['type']=='turn_start'],[2])
+                self.assertEqual(next(event for event in events if event['type']=='transcript')['source'],'action')
+                self.assertEqual(len(providers.spoken),2)
+                socket.send_json({'type':'stop'})
+
     def test_prompt_inspector_subscribes_to_real_turn_scope_and_clears_with_a_new_call(self):
         providers = FakeProviders()
         payload = {'model':'test-actor', 'messages':[{'role':'system','content':'Stay a washing machine.'},

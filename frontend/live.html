@@ -43,7 +43,7 @@
 <label class="trigger-toggle"><input type="checkbox" id="story-enabled"> Follow narrative beats</label>
 <div id="story-settings">
 <label>Advance beats<select id="story-mode"><option value="director">Director · evidence, then time limit</option><option value="timed">Time limits only</option><option value="manual">Performer only</option></select></label>
-<p class="hint small">Each beat has a goal, private entry note, feeling and time limits. A performer hold pauses automatic progress.</p>
+<p class="hint small">Each new beat prompts a character reply. Beat changes wait until the current answer finishes playing. Hold pauses automatic progress.</p>
 <div id="beat-editor"></div><div class="trigger-actions"><button type="button" id="add-beat" class="quiet">+ Add beat</button><button type="button" id="load-story-example" class="quiet">Anna example</button></div>
 </div>
 <p id="director-model" class="hint small">Separate director call · shares the running Qwen model</p>
@@ -51,6 +51,10 @@
 <input type="hidden" name="speaker" value="Chelsie"></form><p class="hint small">Character details stay in this browser. End the call to edit them.</p></aside>
 <section class="conversation" aria-label="Live character conversation"><div class="conversation-heading"><div><span class="eyebrow">VOICE REHEARSAL</span><h2 id="chat-title">Talk to Anna</h2></div><div class="conversation-tools"><span class="live-badge">Live audio</span><button type="button" id="inspect-model" class="quiet" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-14-2 16"/></svg>See what the model sees</button></div></div>
 <p class="notice" id="mode-note">Checking speech recognition, the character model and Drama 3…</p>
+<section id="director-panel" aria-label="Director">
+<div class="director-panel-row"><p id="director-summary">Director</p><button type="button" id="toggle-director" class="quiet" aria-expanded="false" aria-controls="director-content">Show director controls</button></div>
+<div id="director-content" hidden>
+<p id="director-empty" class="hint small">Narrative controls and the latest director note appear here during your call.</p>
 <section id="story-stage" aria-label="Narrative beats" hidden>
 <div class="story-heading"><strong id="story-title">Director script</strong><span id="story-clock" class="hint small"></span></div>
 <ol id="beat-progress" class="beat-progress" aria-label="Story progress"></ol>
@@ -58,11 +62,12 @@
 <div class="story-buttons"><button type="button" id="previous-beat" class="quiet">← Previous</button><button type="button" id="hold-story" class="secondary">Hold</button><button type="button" id="next-beat" class="secondary">Next beat →</button><button type="button" id="cue-beat" class="quiet">Cue character</button></div>
 <p id="story-reason" class="hint small" role="status"></p></section>
 <details id="director-latest" hidden><summary>Latest director note</summary><p id="director-note" class="hint small"></p></details>
+</div></section>
 <div id="messages" role="log" aria-live="polite"><div id="empty-state"><div class="spark">✳</div><h3>A conversation, one turn at a time.</h3><p>Start the call and speak. Pause to hear a reply. Use Stop reply to take over.</p></div></div>
 <div class="call-controls"><p id="call-state" role="status">Ready when you are</p><div class="call-buttons">
 <button id="start-call" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span>Start call</span></button>
 <button id="mute" class="secondary" hidden>Mute mic</button><button id="interrupt" class="secondary" hidden>Stop reply</button><button id="text-mode" class="quiet">Test with text</button></div>
-<div id="feedback" role="alert"></div><div id="timing" class="hint small"></div>
+<div id="feedback" role="alert"></div><button type="button" id="retry-voice" class="quiet" hidden disabled>Retry voice</button><div id="timing" class="hint small"></div>
 <form id="typed-form" class="composer" hidden><label class="sr-only" for="typed-message">Message your character</label><textarea id="typed-message" rows="1" maxlength="2000" placeholder="Type a message…"></textarea><button id="send-text" class="primary" type="submit">Send ↑</button></form>
 <p class="hint small center">Mic waits during replies · Replies play as they arrive · Headphones recommended</p>
 <p class="attribution">Built with Fish Audio · Speech recognition → director → character actor → Drama 3 voice</p></div>

@@ -145,3 +145,10 @@ test('omitted voice bytes and oversized requests remain explicit instead of pret
   assert.match(sections(nodes)[0].text,/exceeded the inspection size limit/);
   assert.equal(nodes['copy-inspection'].disabled,true);
 });
+
+test('actual voice-retry requests are labelled without constructing an additional prompt',()=>{
+  const {inspector,nodes}=setup();inspector.setConnected(true);
+  const captured={...request(3,'tts'),phase:'voice_retry'};inspect(inspector,[captured]);
+  assert.match(nodes['inspection-request'].children[0].textContent,/\(voice retry\)/);
+  assert.deepEqual(JSON.parse(nodes['inspection-json'].textContent),captured.payload);
+});

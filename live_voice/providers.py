@@ -26,6 +26,17 @@ class VoiceTakeIncomplete(RuntimeError):
     """The voice service did not confirm a complete, uncapped PCM take."""
 
 
+class VoiceServiceUnavailable(RuntimeError):
+    """A transient voice-service failure remained after the bounded retry."""
+    def __init__(self):
+        super().__init__('The voice service is temporarily unavailable. Check that Drama 3 is ready, '
+                         'then retry this reply. The chosen emotion and voice have not changed.')
+
+
+TRANSIENT_VOICE_STATUSES = frozenset((408, 429, 502, 503, 504))
+TRANSIENT_VOICE_ERRORS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+
+
 async def speech_events(response):
     """Read complete SSE events, independently of HTTP packet boundaries."""
     event = None
@@ -239,15 +250,31 @@ class LocalProviders:
         playback; it prevents an unconfirmed/capped take from reaching listeners.
         This verifies protocol completion, not that every requested word was said.
         """
-        try:
-            pcm = await self._voice_take(text, reference)
-        except VoiceTakeIncomplete:
-            # The whole reply keeps its original emotion, instructions and voice.
-            # Never make a failed expressive take succeed by changing its delivery.
-            message = 'Voice generation did not finish. Retrying the whole reply with the same emotion and voice.'
+        # Freeze a caller's mutable reference before the first attempt. Incomplete
+        # takes and service failures share one retry, never nested retry loops.
+        reference = tuple(reference) if reference else reference
+        for attempt in range(2):
+            transient = False
+            try:
+                pcm = await self._voice_take(text, reference)
+            except VoiceTakeIncomplete:
+                if attempt: raise
+                # Never recover an expressive take by stripping its delivery.
+                message = 'Voice generation did not finish. Retrying the whole reply with the same emotion and voice.'
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in TRANSIENT_VOICE_STATUSES: raise
+                if attempt: raise VoiceServiceUnavailable() from None
+                transient = True
+                message = 'The voice service is temporarily unavailable. Retrying the whole reply with the same emotion and voice.'
+            except TRANSIENT_VOICE_ERRORS:
+                if attempt: raise VoiceServiceUnavailable() from None
+                transient = True
+                message = 'The voice service is temporarily unavailable. Retrying the whole reply with the same emotion and voice.'
+            else:
+                break
             if on_notice is not None: await on_notice(message)
             else: logger.warning(message)
-            pcm = await self._voice_take(text, reference)
+            if transient: await asyncio.sleep(.25)
         # Every final sample is retained; packets remain bounded for WebSocket.
         for start in range(0, len(pcm), 16384):
             yield pcm[start:start + 16384]

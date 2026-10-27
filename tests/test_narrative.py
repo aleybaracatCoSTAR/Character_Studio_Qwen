@@ -156,9 +156,10 @@ class NarrativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.providers.direct=direct
         await self.session.check_story((0,()))
         self.assertEqual(self.session.story.index,1)
+        await self.session.task
         await self.session.check_story((0,()))
         self.assertEqual(self.session.story.index,1);self.assertFalse(self.session.story.finished)
-        self.assertFalse(self.providers.spoken)
+        self.assertEqual(len(self.providers.spoken),1)
 
     async def test_unheard_reply_never_counts_as_beat_evidence_and_clock_is_cancelled(self):
         await self.session.start_story()
@@ -224,6 +225,16 @@ class NarrativeAPITests(unittest.TestCase):
                 self.assertTrue(socket.receive_json()['paused'])
                 socket.send_json({'type':'story','control':{'action':'next'}})
                 state=socket.receive_json();self.assertEqual(state['index'],1);self.assertTrue(state['paused'])
+                events=[]
+                while True:
+                    item=socket.receive()
+                    if item.get('text'):
+                        event=json.loads(item['text']);events.append(event)
+                        if event['type']=='response_done':break
+                self.assertEqual(len([event for event in events if event['type']=='turn_start']),1)
+                self.assertEqual(len(providers.spoken),1)
+                socket.send_json({'type':'played','turn_id':1,'seq':0})
+                socket.send_json({'type':'playback_done','turn_id':1})
                 socket.send_json({'type':'director','settings':{'enabled':False,'notes':'Ask them to choose a wash cycle.'}})
                 self.assertEqual(socket.receive_json()['type'],'director_ack')
                 socket.send_json({'type':'text','text':'Hello'})

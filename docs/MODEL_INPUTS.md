@@ -16,7 +16,7 @@ The viewer uses the actual JSON body at the provider boundary, rather than rebui
 | Emotion check | The trigger-only controller input, when used instead of the director |
 | Drama 3 voice | Complete spoken text with its delivery cue, reference transcript and generation settings |
 
-Each retry is a separate captured request. Background director checks are labelled **between turns**. The model name is the alias actually submitted to the server, such as `live-character` or `live-director`; the main page's deployment line identifies the configured checkpoints.
+Each retry is a separate captured request. An explicit **Retry voice** is labelled **voice retry** and keeps its original turn ID; it does not rerun the actor or director. Background director checks are labelled **between turns**. The model name is the alias actually submitted to the server, such as `live-character` or `live-director`; the main page's deployment line identifies the configured checkpoints.
 
 The window updates while open. It retains at most five recent turns, 24 requests and 256,000 characters in RAM for the current call. Older requests are removed as those limits are reached. A request above 128,000 characters has an explicit omission notice, rather than a silently shortened prompt. End session clears the server and browser snapshots; a new call starts empty. No prompt files or browser-storage history are written.
 

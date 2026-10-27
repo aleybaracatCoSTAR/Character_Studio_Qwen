@@ -210,13 +210,13 @@ class VoiceGenerationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(requests), 2)
             finally: await providers.close()
 
-    async def test_http_network_and_content_type_failures_are_not_retried(self):
-        for failure in ('http', 'network', 'content-type'):
+    async def test_nontransient_http_protocol_and_content_type_failures_are_not_retried(self):
+        for failure in ('http', 'local-protocol', 'content-type'):
             requests = []
             def serve(request):
                 requests.append(request)
-                if failure == 'http': return httpx.Response(503, json={'error': 'unavailable'})
-                if failure == 'network': raise httpx.ConnectError('unreachable', request=request)
+                if failure == 'http': return httpx.Response(400, json={'error': 'invalid request'})
+                if failure == 'local-protocol': raise httpx.LocalProtocolError('invalid request', request=request)
                 return httpx.Response(200, headers={'content-type': 'audio/pcm'}, content=b'\x01\x02')
             providers = LocalProviders(DummySTT(), transport=httpx.MockTransport(serve))
             try:

@@ -95,7 +95,9 @@ Conversation content is limited to **10,000 characters for the actor**, **3,000 
 
 ### Director
 
-Open **Director** to enable guidance and enter the scene intention. The director plans a next conversational move and vocal delivery on each turn; inspect **Latest director note** above the transcript. It defaults to a separate request to the existing Qwen server. See [architecture, separate LLM configuration and limits](DIRECTOR.md). Changing the scene direction applies to the next reply. The actor prompt now asks for progression rather than repeated biography; this is a prompting change, not a model upgrade.
+Open **Director script** in the character sidebar to enable guidance and enter the scene intention. The director plans a next conversational move and vocal delivery on each turn. Above the transcript, **Show director controls** expands the current beat, performer controls and latest director note; **Hide director controls** restores conversation space. This panel starts collapsed and incoming updates preserve your choice. The director defaults to a separate request to the existing Qwen server. See [architecture, separate LLM configuration and limits](DIRECTOR.md). Changing the scene direction applies to the next reply.
+
+Entering another narrative beat prompts one character reply. Performer moves, timer moves and between-turn director advances wait for participant speech and existing playback. When a participant turn itself advances the beat, its answer serves as the new beat's reply. **Cue character** remains a separate rehearsal action. See [narrative rules](NARRATIVE.md).
 
 ### Voice and emotion
 
@@ -104,6 +106,8 @@ Open **How they speak**. The speaking-style text guides the dialogue. **Emotion*
 Choose **Voice → Female** or **Male** for a bundled British reference, or **Automatic** to anchor on the first synthetic reply. The preview plays the reference recording, not a new synthesis. Credits and license are in [assets/voices/NOTICE.md](../assets/voices/NOTICE.md). For a custom voice, choose **Custom reference**, then a **2–15 second uncompressed PCM16 WAV**, mono or stereo at 8–48 kHz, no larger than 2 MB, and enter its exact spoken words. The browser previews the selected clip, then sends it in the bounded start message. Drama 3 receives it as `ref_audio` plus `ref_text`. It is kept in RAM for the call, not written into the character profile or automatically saved to browser storage. Reselect it after reloading. End the call before changing a reference.
 
 These choices use real reference conditioning, rather than a named Drama 3 preset-voice catalogue. Emotional cues are natural language, not guaranteed acoustic settings. The tested format uses a speaker marker followed by one descriptive cue, rather than stacked emotion labels. Unfinished takes are discarded before playback and retried once with the identical reply, emotional cue and reference; the page explains the retry. No retry switches a sentence to natural delivery. See [the real-model comparison](VOICE_COMPLETION.md) and [model examples](https://huggingface.co/fishaudio/drama-3).
+
+Temporary network/service failures share the same single automatic retry as an incomplete take. If voice generation still fails before any audio is released, **Retry voice** appears beside the message. It regenerates the saved reply's voice with its original words and delivery; it does not ask the actor or director for a new answer. Retry notices clear after success. The final failure message remains visible, and a new turn or story revision invalidates the previous retry.
 
 ### Emotional trigger: Anna's reset button
 

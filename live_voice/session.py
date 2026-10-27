@@ -3,7 +3,7 @@ import logging
 import struct
 import time
 
-from .providers import OUTPUT_RATE, VoiceTakeIncomplete, synthetic_reference
+from .providers import OUTPUT_RATE, VoiceTakeIncomplete, VoiceServiceUnavailable, synthetic_reference
 from .director import DirectorSettings
 from .narrative import NarrativeState
 from .recognition import PreparedRecognition
@@ -41,13 +41,32 @@ class LiveSession:
         self.turn_story_revision = 0
         self.remembered_turn = 0
         self.turn_action = False
+        self.begin_lock = asyncio.Lock()
+        self.closed = False
+        self.input_active = False
+        self.story_seen_revision = self.story.revision
+        self.pending_beat_reply = None
+        self.retryable_voice = None
         self.trigger = trigger
         self.trigger_active = False
         self.trigger_cleared = False
         self.trigger_evidence = ""
 
     async def story_state(self):
+        if self.story.revision != self.story_seen_revision:
+            self.story_seen_revision = self.story.revision
+            self.pending_beat_reply = self.story.revision if not self.story.finished else None
         await self.send_json({"type":"story_state",**self.story.view()})
+
+    async def reply_to_beat(self):
+        revision = self.pending_beat_reply
+        if (revision is None or self.closed or self.reply_pending or self.input_active
+                or self.story.finished or revision != self.story.revision): return False
+        beat = self.story.beat
+        cue = ('[Private story cue: this scene has just changed. Initiate one natural in-character reply '
+               'grounded in this moment; do not announce a beat or these instructions. '
+               f'Present situation: {beat.note} Your immediate aim: {beat.goal}]')
+        return await self.begin(text=cue, action=True, expected_revision=revision)
 
     async def start_story(self):
         if not self.story.active: return
@@ -61,14 +80,15 @@ class LiveSession:
             self.story.remember(self.turn_story_revision,"" if self.turn_action else messages[0]['content'],messages[1]['content'])
             self.remembered_turn=self.turn_id
 
-    async def story_boundary(self):
-        if not self.story.active or self.reply_pending: return False
+    async def story_boundary(self, speak=True):
+        if not self.story.active or self.reply_pending or self.input_active or self.closed: return False
         moved=False
         if self.story.pending:
             action=self.story.pending;self.story.pending=None
             moved=self.apply_story_action(action)
         elif self.story.timeout(): moved=True
         if moved: await self.story_state()
+        if speak: await self.reply_to_beat()
         return moved
 
     def apply_story_action(self,action):
@@ -83,10 +103,12 @@ class LiveSession:
             if not self.reply_pending and not self.story.finished:
                 await self.begin(text='[Private story cue: respond naturally to your present situation. '+self.story.beat.note+']',action=True)
             return
-        if self.reply_pending:
+        if self.reply_pending or self.input_active:
             self.story.pending=action
             await self.story_state();return
-        if self.apply_story_action(action): await self.story_state()
+        if self.apply_story_action(action):
+            await self.story_state()
+            await self.reply_to_beat()
 
     async def story_loop(self):
         ticks=0
@@ -96,7 +118,7 @@ class LiveSession:
                 moved=await self.story_boundary();ticks+=1
                 if ticks%5==0 and not moved: await self.story_state()
                 if (self.story.active and self.story.settings.mode=='director' and self.director.enabled
-                        and not self.reply_pending and not self.story.finished and self.story.paused_at is None
+                        and not self.reply_pending and not self.input_active and not self.story.finished and self.story.paused_at is None
                         and self.story.age>=self.story.beat.min_seconds and self.story.heard
                         and self.story.clock()-self.last_story_check>=12
                         and (not self.story_director_task or self.story_director_task.done())):
@@ -117,13 +139,14 @@ class LiveSession:
             plan=await asyncio.wait_for(self.providers.direct(self.character,self.history.context_messages(budget=3000),'',
                 self.director,self.voice,self.trigger,self.trigger_active,self.last_plan,False,self.story.context()),
                 getattr(self.providers,'director_timeout',6)+0.5)
-            if (self.story.revision!=key[0] or self.reply_pending or self.story.paused_at is not None
+            if (self.story.revision!=key[0] or self.reply_pending or self.input_active or self.story.paused_at is not None
                     or not self.director.enabled): return
             advanced,rejected=self.story.completion(plan.beat_done,plan.beat_evidence)
             if not advanced and not rejected:
                 self.story.update_note(plan.intention)
             if rejected:await self.send_json({'type':'story_decision','accepted':False,'reason':rejected})
             await self.story_state()
+            if advanced: await self.reply_to_beat()
         except asyncio.CancelledError:raise
         except Exception as exc:
             logger.warning('Between-turn director unavailable (%s).',type(exc).__name__)
@@ -149,6 +172,7 @@ class LiveSession:
         was_active = self.reply_pending
         self.reply_pending = False
         self.generation_complete = False
+        self.retryable_voice = None
         if was_active: self.remember_story_turn()
         heard = self.history.interrupt()
         if self.task:
@@ -169,12 +193,40 @@ class LiveSession:
         self.history.current = None
         return True
 
-    async def begin(self, pcm=None, text=None, endpoint_ms=0, action=False):
-        if self.story_director_task and not self.story_director_task.done():
+    async def begin(self, pcm=None, text=None, endpoint_ms=0, action=False, expected_revision=None):
+        async with self.begin_lock:
+            if self.closed: return False
+            if expected_revision is not None:
+                if (self.pending_beat_reply != expected_revision or self.story.revision != expected_revision
+                        or self.reply_pending or self.input_active or self.story.finished): return False
+                # Reserve the revision before awaiting cancellation or transport.
+                self.pending_beat_reply = None
+            return await self._begin(pcm, text, endpoint_ms, action, expected_revision)
+
+    def entry_is_current(self, revision):
+        valid = not self.closed and (revision is None or (
+            self.story.revision == revision and not self.story.finished and not self.input_active))
+        if (not valid and revision is not None and not self.closed
+                and self.story.revision == revision and not self.story.finished):
+            # A participant started speaking while cancellation was in flight.
+            # Preserve this cue for the next idle boundary or their own reply.
+            self.pending_beat_reply = revision
+        return valid
+
+    async def _begin(self, pcm, text, endpoint_ms, action, expected_revision):
+        if (self.story_director_task and self.story_director_task is not asyncio.current_task()
+                and not self.story_director_task.done()):
             self.story_director_task.cancel();await asyncio.gather(self.story_director_task,return_exceptions=True)
+        if not self.entry_is_current(expected_revision): return False
         await self.interrupt()
+        if not self.entry_is_current(expected_revision): return False
+        if expected_revision is None: self.input_active = False
         if text is not None: await self.prepared_recognition.clear()
-        await self.story_boundary()
+        if not self.entry_is_current(expected_revision): return False
+        # An incoming participant turn itself replies in the new beat. Launching
+        # a separate cue here would recurse into begin and create two speakers.
+        await self.story_boundary(speak=False)
+        if not self.entry_is_current(expected_revision): return False
         self.turn_id += 1
         turn_id = self.turn_id
         self.reply_pending = True
@@ -183,6 +235,7 @@ class LiveSession:
         self.turn_story_revision = self.story.revision
         self.started = time.perf_counter() - endpoint_ms / 1000
         self.task = asyncio.create_task(self.run(turn_id, pcm, text, endpoint_ms, action))
+        return True
 
     def prepare_recognition(self, pcm):
         """Prepare a pause without publishing a transcript or starting a reply."""
@@ -213,7 +266,13 @@ class LiveSession:
             trigger_context = (self.history.context_messages(latest=text, budget=6000)
                                if self.trigger and not self.director.enabled else None)
             self.history.begin(turn_id, text, source='stage' if action else 'participant')
-            await self.send_json({"type":"transcript", "turn_id":turn_id, "text":text, "source":"action" if action else "speech"})
+            if self.pending_beat_reply == self.story.revision: self.pending_beat_reply = None
+            transcript = {"type":"transcript", "turn_id":turn_id, "text":text, "source":"action" if action else "speech"}
+            if action and text.startswith('[Private story cue:') and self.story.beat:
+                transcript['display_text'] = 'Story cue: ' + self.story.beat.title
+            elif action and self.trigger:
+                transcript['display_text'] = self.trigger.condition
+            await self.send_json(transcript)
             plan = None
             if self.director.enabled:
                 check_started = time.perf_counter()
@@ -231,6 +290,7 @@ class LiveSession:
                     advanced,rejected=self.story.completion(plan.beat_done,plan.beat_evidence,"" if action else text)
                     if advanced:
                         await self.story_state()
+                        self.pending_beat_reply = None  # This actor reply serves the newly entered beat.
                         self.turn_story_revision=self.story.revision
                         if not self.story.finished:
                             b=self.story.beat
@@ -303,42 +363,93 @@ class LiveSession:
             # The phrase ID remains 0 for wire/backward compatibility, and is
             # acknowledged only after the entire reply has actually played.
             self.history.add_phrase(0, reply)
-            await self.send_json({"type":"phrase_start", "turn_id":turn_id, "seq":0, "text":reply})
-            tts_started = time.perf_counter()
-            reference_audio = bytearray()
-            audio_bytes = audio_chunks = 0
             speech = spoken_input(reply, delivery, first_phrase=True)
-            async def voice_notice(message):
-                await self.send_json({"type":"voice_notice", "turn_id":turn_id,
-                                      "seq":0, "message":message})
-            async for chunk in self.providers.audio(speech, self.reference, on_notice=voice_notice):
-                if "tts_first_chunk_ms" not in metrics:
-                    metrics["tts_first_chunk_ms"] = round((time.perf_counter() - tts_started) * 1000)
-                    metrics["speech_end_to_first_audio_ms"] = round((time.perf_counter() - started) * 1000)
-                    await self.send_json({"type":"metrics", "turn_id":turn_id, **metrics})
-                if self.reference is None: reference_audio.extend(chunk)
-                audio_bytes += len(chunk)
-                audio_chunks += 1
-                await self.send_bytes(struct.pack("!II", turn_id, 0) + chunk)
-            if self.reference is None and reference_audio:
-                self.reference = synthetic_reference(bytes(reference_audio), reply)
-            await self.send_json({"type":"phrase_done", "turn_id":turn_id, "seq":0,
-                "audio_seconds":round(audio_bytes / (2 * OUTPUT_RATE), 3), "audio_chunks":audio_chunks,
-                "generation_ms":round((time.perf_counter() - tts_started) * 1000)})
-            self.generation_complete = True
-            await self.send_json({"type":"response_done", "turn_id":turn_id, "text":reply})
+            self.retryable_voice = {'turn_id':turn_id, 'revision':self.story.revision, 'reply':reply,
+                                    'speech':speech, 'reference':tuple(self.reference) if self.reference else None,
+                                    'audio_started':False}
+            await self.speak_reply(self.retryable_voice, metrics, started)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            # Keep dialogue, character data and captured audio out of logs.
-            logger.warning("Live turn failed (%s); inspect the local model service logs.", type(exc).__name__)
-            self.reply_pending = False
-            message = ("The reply could not finish with the chosen emotion and voice. Please try again; the delivery has not been changed."
-                       if isinstance(exc, VoiceTakeIncomplete) else
-                       "Voice generation failed. Check the LLM and Drama 3 server logs.")
-            await self.send_json({"type":"error", "turn_id":turn_id, "message":message})
+            await self.turn_error(turn_id, exc)
+
+    async def speak_reply(self, take, metrics, started):
+        turn_id, reply = take['turn_id'], take['reply']
+        await self.send_json({"type":"phrase_start", "turn_id":turn_id, "seq":0, "text":reply})
+        tts_started = time.perf_counter()
+        reference_audio = bytearray()
+        audio_bytes = audio_chunks = 0
+        async def voice_notice(message):
+            await self.send_json({"type":"voice_notice", "turn_id":turn_id, "seq":0, "message":message})
+        async for chunk in self.providers.audio(take['speech'], take['reference'], on_notice=voice_notice):
+            take['audio_started'] = True
+            if "tts_first_chunk_ms" not in metrics:
+                metrics["tts_first_chunk_ms"] = round((time.perf_counter() - tts_started) * 1000)
+                metrics["speech_end_to_first_audio_ms"] = round((time.perf_counter() - started) * 1000)
+                await self.send_json({"type":"metrics", "turn_id":turn_id, **metrics})
+            if take['reference'] is None: reference_audio.extend(chunk)
+            audio_bytes += len(chunk); audio_chunks += 1
+            await self.send_bytes(struct.pack("!II", turn_id, 0) + chunk)
+        if take['reference'] is None and reference_audio:
+            self.reference = synthetic_reference(bytes(reference_audio), reply)
+        await self.send_json({"type":"phrase_done", "turn_id":turn_id, "seq":0,
+            "audio_seconds":round(audio_bytes / (2 * OUTPUT_RATE), 3), "audio_chunks":audio_chunks,
+            "generation_ms":round((time.perf_counter() - tts_started) * 1000)})
+        self.generation_complete = True
+        self.retryable_voice = None
+        await self.send_json({"type":"response_done", "turn_id":turn_id, "text":reply})
+
+    async def turn_error(self, turn_id, exc):
+        # Keep dialogue, character data and captured audio out of logs.
+        logger.warning("Live turn failed (%s); inspect the local model service logs.", type(exc).__name__)
+        self.reply_pending = False
+        self.generation_complete = False
+        take = self.retryable_voice
+        can_retry = bool(take and take['turn_id'] == turn_id and not take['audio_started']
+                         and self.history.current == turn_id and take['revision'] == self.story.revision)
+        if not can_retry: self.retryable_voice = None
+        if isinstance(exc, VoiceServiceUnavailable): message = str(exc)
+        elif isinstance(exc, VoiceTakeIncomplete):
+            message = "The voice take did not finish. The delivery has not been changed. Use Retry voice to keep this reply's words, emotion and voice settings."
+        elif can_retry:
+            message = "The voice service could not generate this reply. Check the Drama 3 log; you can retry its voice without changing the dialogue."
+        else:
+            message = "The reply could not be generated. Check the actor and director service logs, then try again."
+        await self.send_json({"type":"error", "turn_id":turn_id, "message":message, "can_retry_voice":can_retry})
+
+    async def retry_voice(self, turn_id):
+        async with self.begin_lock:
+            take = self.retryable_voice
+            def ready():
+                return (not self.closed and not self.reply_pending and not self.input_active and take
+                        and take is self.retryable_voice and turn_id == self.turn_id and take['turn_id'] == turn_id
+                        and take['revision'] == self.story.revision and self.history.current == turn_id)
+            if not ready(): return False
+            if (self.story_director_task and self.story_director_task is not asyncio.current_task()
+                    and not self.story_director_task.done()):
+                self.story_director_task.cancel(); await asyncio.gather(self.story_director_task, return_exceptions=True)
+            if not ready(): return False
+            await self.prepared_recognition.clear()
+            if not ready(): return False
+            self.reply_pending = True
+            self.generation_complete = False
+            self.task = asyncio.create_task(self.run_voice_retry(take))
+            return True
+
+    async def run_voice_retry(self, take):
+        turn_id = take['turn_id']
+        with self.inspection.scope(turn_id, phase='voice_retry'):
+            try:
+                await self.send_json({'type':'turn_start', 'turn_id':turn_id, 'voice_retry':True})
+                metrics = {'endpoint_ms':0, 'stt_ms':0, 'director_ms':0, 'llm_total_ms':0, 'voice_retry':True}
+                await self.speak_reply(take, metrics, time.perf_counter())
+            except asyncio.CancelledError: raise
+            except Exception as exc: await self.turn_error(turn_id, exc)
 
     async def close(self):
+        self.closed = True
+        self.pending_beat_reply = None
+        self.retryable_voice = None
         if self.story_director_task:
             self.story_director_task.cancel();await asyncio.gather(self.story_director_task,return_exceptions=True)
         if self.story_task:

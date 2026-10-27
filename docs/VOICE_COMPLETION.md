@@ -1,6 +1,6 @@
 # Whole-reply completion and consistent emotion
 
-Updated 26 October 2026. The current policy is one continuous voice take per complete reply, with one fixed emotion and reference. The earlier sentence-level natural-delivery retry was reported to create unwanted mood changes and has been removed.
+Updated 27 October 2026. The current policy is one continuous voice take per complete reply, with one fixed emotion and reference. The earlier sentence-level natural-delivery retry was reported to create unwanted mood changes and has been removed.
 
 ## What failed
 
@@ -14,6 +14,9 @@ The old expressive chunker also merged short sentences into longer synthesis req
 - Actor text still streams to the transcript, but the app waits for the final text before calling TTS. The whole reply goes through one synthesis request with one speaker-prefixed descriptive cue. It is not split into independent sentence takes, which can vary their performance even with the same cue.
 - The app collects the full take's SSE audio and terminal token-usage event before sending PCM. It validates 44.1 kHz mono PCM, alignment, size, complete events and an output-token count below the requested maximum.
 - An incomplete/capped take is discarded and retried once with the **identical full text, cue, emotion and voice reference**. This applies to plain replies too. No retry drops emotional instructions, changes voice, or substitutes natural delivery. If both attempts fail, the interface reports failure without playing either incomplete take.
+- Temporary transport failures and HTTP 408/429/502/503/504 share that same one-retry budget, with a 250 ms pause before a transient-service retry. Configuration/format errors, other HTTP statuses and cancellation are not automatically retried. A mixed incomplete/service failure still gets at most two attempts.
+- After a voice failure before any audio is released, **Retry voice** regenerates the saved full reply using its original cue and reference. It keeps the same turn and does not call the actor or director, duplicate text or add a participant utterance. New turns, interruption, a changed story revision or call closure invalidate the old retry. Concurrent retry clicks cannot launch two generations. A success still waits for playback acknowledgement before storing assistant speech.
+- The message “Voice generation did not finish. Retrying the whole reply with the same emotion and voice.” is a retry notice, not a final failure. Temporary notices clear after successful voice generation, the next turn or disconnect; final and connection errors remain visible.
 - Existing `phrase_start`, `phrase_done` and binary sequence IDs remain compatible, but sequence `0` now denotes the entire reply. Playback acknowledgement and heard-memory commitment wait until all its audio finishes. An interrupted reply is conservatively omitted as a whole; the system does not infer which words were heard.
 
 **Latency tradeoff:** audio waits for complete actor text and a validated full TTS take. This adds startup delay compared with sentence streaming, while avoiding audible sentence-to-sentence take resets or fallback mood changes. Once ready, PCM is transported in bounded chunks and the browser preserves its native playback rate. Model prosody can still vary within one take; this change removes application-level emotion switches rather than guaranteeing a particular acted performance.

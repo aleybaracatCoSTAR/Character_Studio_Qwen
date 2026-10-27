@@ -10,6 +10,8 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 
 **Inspect model inputs:** choose **See what the model sees** beside the live conversation title to read the actual actor, director and voice requests, including conversation context and emotion cues. Select a recent request and copy its JSON for testing. [How the viewer works](docs/MODEL_INPUTS.md).
 
+**Beat replies and voice recovery:** entering a new narrative beat now prompts one character reply, waiting for participant speech and current playback to finish. Director controls start collapsed behind **Show director controls** so the transcript has more room. Temporary voice-service failures share one automatic retry with incomplete takes; **Retry voice** can then regenerate the existing reply's audio with its original wording and delivery, without rerunning the actor or director.
+
 **Status: starter prototype.** CPU transport tests and browser checks pass. A short standalone Drama 3 synthesis succeeded on Surrey through the Mac SSH tunnel on 23 October 2026; [details](experiments/drama3/README.md#validation). The full live stack, combined H200 memory use, spoken quality and live response time still need validation. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
 
 ![Character sheet and conversation preview](docs/screenshots/studio-preview.jpg)
@@ -77,11 +79,11 @@ Read [architecture](docs/ARCHITECTURE.md) for the request flow and [handoff note
 node --check frontend/app.js
 node --check frontend/recorder-worklet.js
 node --input-type=module --check < frontend/live.js
-node --test tests/live_audio.test.mjs tests/live_capture.test.mjs tests/prompt_inspector.test.mjs
+node --test tests/*.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-200 Python tests and 27 JavaScript tests exercise app contracts, actual model-input inspection, protected turn-taking, provisional recognition, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, bounded voice references, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
+249 Python tests and 47 JavaScript tests exercise app contracts, beat-entry replies, voice recovery, actual model-input inspection, protected turn-taking, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

@@ -72,6 +72,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
         return {"preview":preview,"ready":all(health.values()),"services":health,
                 "voice_pipeline":"responsive-context-v4",
                 "model_inspection":True,
+                "beat_entry_replies":True, "voice_retry":True,
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
                 "models":{"actor":deployment['actor']['id'],"director":(deployment['director'] or deployment['actor'])['id']},
@@ -118,6 +119,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
             listen_after = 0.0
             def clear_microphone():
                 detector.pending.clear(); detector.reset()
+                session.input_active = False
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
                              "endpoint_ms":detector.silence_frames * 20, "turn_taking":"Stop reply to interrupt; mic resumes after playback",
                              "voice":"uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated reply anchors this call"})
@@ -135,6 +137,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
                         continue
                     for event, pcm, endpoint_ms in detector.feed(packet):
                         if event == "start":
+                            session.input_active = True
                             await send_json({"type":"speech_start"})
                         elif event == "prepare":
                             session.prepare_recognition(pcm)
@@ -142,13 +145,21 @@ def create_app(preview=False, providers=None, vad_factory=None):
                             await session.begin(pcm=pcm, endpoint_ms=endpoint_ms)
                             clear_microphone()
                             break
-                        elif event == "noise": await send_json({"type":"listening"})
+                        elif event == "noise":
+                            session.input_active = False
+                            await send_json({"type":"listening"})
                 elif message.get("text") is not None:
                     if len(message["text"]) > 16000: raise ValueError("Control message too long.")
                     command = json.loads(message["text"])
                     if not isinstance(command, dict): raise ValueError("Invalid control message.")
                     if command.get("type") == "inspect":
                         await session.inspection.subscribe(command.get('enabled'))
+                    elif command.get("type") == "retry_voice":
+                        turn = command.get('turn_id')
+                        if type(turn) is not int: raise ValueError('Invalid voice retry.')
+                        if not await session.retry_voice(turn):
+                            await send_json({'type':'voice_retry_unavailable', 'turn_id':turn,
+                                             'message':'This voice reply is no longer available. Finish speaking or send a new message.'})
                     elif command.get("type") == "played":
                         turn, sequence = command.get("turn_id"), command.get("seq")
                         if type(turn) is not int or type(sequence) is not int:
@@ -161,6 +172,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
                             clear_microphone()
                             # Allow loudspeaker audio to decay before accepting another utterance.
                             listen_after = time.monotonic() + 0.35
+                            await session.story_boundary()
                     elif command.get("type") == "text":
                         text = command.get("text","")
                         if not isinstance(text,str) or not 0 < len(text.strip()) <= 2000: raise ValueError("Enter a short message.")

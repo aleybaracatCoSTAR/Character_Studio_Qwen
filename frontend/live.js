@@ -2,6 +2,9 @@ import {StreamResampler,pcm16,PCMPlayback} from './live-audio.mjs';
 import {Conversation} from './live-transcript.mjs';
 import {StoryEditor} from './live-story.mjs';
 import {PromptInspector} from './live-inspector.mjs';
+import {VoiceRetry} from './live-voice-retry.mjs';
+import {DirectorPanel} from './live-director-panel.mjs';
+import {CallFeedback} from './live-feedback.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 let socket=null,context=null,stream=null,capture=null,playback=null,connecting=false,muted=false,ready=false,currentTurn=0;
@@ -10,7 +13,15 @@ let referenceURL=null;
 let triggerActive=false;
 let sessionReady=false,disconnecting=null;
 const conversation=new Conversation($('messages'),$('empty-state'));
+const callFeedback=new CallFeedback($('feedback'));
 const inspector=new PromptInspector({document,send});
+const directorPanel=new DirectorPanel({button:$('toggle-director'),content:$('director-content'),
+  summary:$('director-summary'),empty:$('director-empty')});
+const voiceRetry=new VoiceRetry({button:$('retry-voice'),send,
+  canRetry:()=>sessionReady&&socket?.readyState===WebSocket.OPEN,
+  onRetry:()=>{holdMicrophone();feedback();state('Retrying voice… · Mic paused');},
+  onUnavailable:data=>{feedback(data.message);resumeMicrophone();},
+  onError:data=>{feedback(data.message);playback?.clear();resumeMicrophone();}});
 function directorSettings(){return {enabled:$('director-enabled').checked,notes:$('director-input').value};}
 function triggerSettings(){return $('trigger-enabled').checked?{
   action:$('trigger-action').value,condition:$('trigger-condition').value,emotion:$('trigger-emotion').value,
@@ -31,7 +42,7 @@ function previewStory(){
     titles:settings.beats.map(beat=>beat.title),current:settings.beats[0],mode:settings.mode,elapsed:0,preview:true});
 }
 function renderStory(data){
-  storyView=data;$('story-stage').hidden=!data.enabled;
+  storyView=data;directorPanel.updateStory(data);$('story-stage').hidden=!data.enabled;
   if(!data.enabled)return;
   $('story-title').textContent=data.finished?'Story complete':`${data.index+1}/${data.count} · ${data.current.title}`;
   $('story-clock').textContent=data.preview?'Script preview':data.finished?'Finished':`${data.paused?'Held · ':''}${Math.floor(data.elapsed)} s · ${data.current.min_seconds}–${data.current.max_seconds} s`;
@@ -40,7 +51,7 @@ function renderStory(data){
   data.titles.forEach((title,index)=>{const item=document.createElement('li');item.textContent=String(index+1);item.title=title;item.className=index===data.index?'current':index<data.index?'past':'';
     if(index===data.index)item.setAttribute('aria-current','step');$('beat-progress').append(item);});
   $('hold-story').textContent=data.paused?'Resume':'Hold';$('next-beat').textContent=data.index===data.count-1?'Finish story':'Next beat →';
-  $('story-reason').textContent=data.preview?'Start a call to run the arc.':data.pending?'Beat change queued until this reply finishes.':`${data.mode} · ${data.reason}${data.evidence?' · '+data.evidence:''}${data.director_note?' · '+data.director_note:''}`;
+  $('story-reason').textContent=data.preview?'Start a call to run the arc.':data.pending?'Beat change queued until this reply finishes playing.':`${data.mode} · ${data.reason}${data.evidence?' · '+data.evidence:''}${data.director_note?' · '+data.director_note:''}`;
   storyControls();
 }
 function storyControls(){
@@ -51,7 +62,7 @@ function storyControls(){
   $('cue-beat').disabled=!live||storyView.finished||replyPending;
 }
 function character(){return Object.fromEntries(fields.map(key=>[key,form.elements[key].value]));}
-function feedback(message=''){$('feedback').textContent=message;}
+function feedback(message='',kind='general'){callFeedback.show(message,kind);}
 function state(message){$('call-state').textContent=message;}
 function send(value){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(value));}
 function delivery(){return {emotion:$('voice-emotion').value,event:$('voice-event').value,direction:$('voice-direction').value};}
@@ -68,7 +79,7 @@ async function voiceSettings(){
   });
   return {...settings,reference_audio:`data:audio/wav;base64,${encoded}`,reference_text:transcript};
 }
-function holdMicrophone(){clearTimeout(resumeTimer);replyPending=true;controls();}
+function holdMicrophone(){voiceRetry.clear();clearTimeout(resumeTimer);replyPending=true;controls();}
 function resumeMicrophone(){
   clearTimeout(resumeTimer);
   resumeTimer=setTimeout(()=>{
@@ -95,6 +106,8 @@ async function disconnect(){
   const previous=socket,oldContext=context,oldStream=stream,oldCapture=capture,oldPlayback=playback;
   socket=null;context=null;stream=null;capture=null;playback=null;connecting=true;
   inspector.setConnected(false);
+  voiceRetry.clear();
+  callFeedback.clearVoiceNotice();
   clearTimeout(resumeTimer);replyPending=false;sessionReady=false;triggerActive=false;controls();
   $('trigger-state').textContent='Start a call to test the reaction.';
   if(previous){if(previous.readyState===WebSocket.OPEN)previous.send(JSON.stringify({type:'stop'}));previous.close();}
@@ -113,7 +126,7 @@ function event(data){
   if(data.type==='director_note'){
     if(data.turn_id!==currentTurn)return;
     $('director-note').textContent=data.ok?`Intention: ${data.intention}\nVoice: ${data.emotion} · ${data.delivery}${data.evidence?'\nEmotion evidence: '+data.evidence:''}${data.beat_evidence?'\nBeat evidence: '+data.beat_evidence:''}`:data.message;
-    $('director-latest').hidden=false;state('Thinking… · Mic paused');return;
+    $('director-latest').hidden=false;directorPanel.noteAvailable();state('Thinking… · Mic paused');return;
   }
   if(data.type==='trigger_state'){
     triggerActive=data.active;$('trigger-state').textContent=(data.active?`Reaction active · ${data.emotion}`:'Normal state restored')+(data.evidence?` · ${data.evidence}`:'');controls();return;
@@ -126,23 +139,26 @@ function event(data){
   if(data.type==='ready'){sessionReady=true;inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
-  if(data.type==='turn_start'){holdMicrophone();currentTurn=data.turn_id;playback.setTurn(currentTurn);state('Understanding… · Mic paused');return;}
+  if(data.type==='turn_start'){callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
   if(data.type==='interrupted'){
-    if(data.turn_id===currentTurn){playback.clear();resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
+    if(data.turn_id===currentTurn){voiceRetry.clear();playback.clear();resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
     return;
   }
-  if(data.type==='error'){feedback(data.message);if(playback)playback.clear();resumeMicrophone();return;}
+  if(data.type==='error'){voiceRetry.handleError(data,currentTurn);return;}
+  if(data.type==='voice_retry_unavailable'){voiceRetry.handleUnavailable(data,currentTurn);return;}
   if(data.type==='empty_transcript'){feedback('I did not catch that. Try again.');resumeMicrophone();return;}
   if(data.turn_id!==currentTurn)return;
-  if(data.type==='voice_notice'){feedback(data.message);return;}
+  if(data.type==='voice_notice'){feedback(data.message,'voice_notice');return;}
   if(data.type==='phrase_start'){state('Preparing the whole reply… · Mic paused');return;}
-  if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.text,'user');state($('director-enabled').checked?'Directing the next reply… · Mic paused':$('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
+  if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.display_text??data.text,'user');state($('director-enabled').checked?'Directing the next reply… · Mic paused':$('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
   if(data.type==='text_delta'){
     if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
     replies.get(currentTurn).content.textContent+=data.text;$('messages').scrollTop=$('messages').scrollHeight;
   }
   if(data.type==='phrase_done')playback.phraseDone(data.seq);
   if(data.type==='response_done'){
+    callFeedback.clearVoiceNotice();
+    voiceRetry.clear();
     if(data.partial&&replies.has(currentTurn)){
       const reply=replies.get(currentTurn);reply.content.textContent=data.text;reply.node.classList.add('interrupted');
     }
@@ -158,7 +174,7 @@ async function connect(useMic=true){
   }
   connecting=true;feedback();controls();
   try{
-    conversation.reset();inspector.reset();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
+    conversation.reset();inspector.reset();voiceRetry.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}

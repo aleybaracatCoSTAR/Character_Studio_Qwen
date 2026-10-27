@@ -52,7 +52,8 @@ export class PromptInspector {
     const select=this.get('inspection-request');select.replaceChildren();
     for(const request of this.requests){
       const option=this.document.createElement('option');option.value=String(request.id);
-      option.textContent=`${request.turn_id?`Turn ${request.turn_id}`:'Between-turn check'} · ${STAGES[request.stage]}${request.phase==='between_turns'?' (between turns)':''} · #${request.id}`;
+      const phase=request.phase==='between_turns'?' (between turns)':request.phase==='voice_retry'?' (voice retry)':'';
+      option.textContent=`${request.turn_id?`Turn ${request.turn_id}`:'Between-turn check'} · ${STAGES[request.stage]}${phase} · #${request.id}`;
       select.append(option);
     }
     if(this.selectedId!==null)select.value=String(this.selectedId);
