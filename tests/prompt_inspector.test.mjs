@@ -3,22 +3,23 @@ import assert from 'node:assert/strict';
 import {PromptInspector} from '../frontend/live-inspector.mjs';
 
 function element(){
-  return {children:[],hidden:false,disabled:false,open:false,textContent:'',value:'',listeners:new Map(),
+  return {children:[],hidden:false,disabled:false,open:false,textContent:'',value:'',scrollTop:0,replaceCount:0,listeners:new Map(),
     set innerHTML(value){throw new Error('Request text must never use innerHTML.');},
-    append(...children){this.children.push(...children);},replaceChildren(...children){this.children=[...children];},
+    append(...children){this.children.push(...children);},replaceChildren(...children){this.replaceCount++;this.children=[...children];},
     addEventListener(type,listener){this.listeners.set(type,listener);},
     dispatch(type){return this.listeners.get(type)?.({target:this});},
     showModal(){this.open=true;},close(){this.open=false;this.dispatch('close');}
   };
 }
-function setup(writeText=async()=>{}){
+function setup(writeText=async()=>{},saveFile){
   const ids=['model-inspector','inspect-model','close-inspector','inspection-request','copy-inspection',
     'inspection-empty','inspection-controls','inspection-detail','inspection-status','inspection-model',
-    'inspection-messages','inspection-json','inspection-raw'];
-  const nodes=Object.fromEntries(ids.map(id=>[id,element()])),sent=[];
+    'inspection-messages','inspection-json','inspection-raw','inspection-latest','inspection-updates',
+    'download-inspection','download-inspection-recent'];
+  const nodes=Object.fromEntries(ids.map(id=>[id,element()])),sent=[],files=[];
   const document={getElementById:id=>nodes[id],createElement:element};
-  const inspector=new PromptInspector({document,send:value=>sent.push(value),writeText});
-  return {inspector,nodes,sent};
+  const inspector=new PromptInspector({document,send:value=>sent.push(value),writeText,saveFile:saveFile??(file=>files.push(file))});
+  return {inspector,nodes,sent,files};
 }
 function request(id=1,stage='actor',turn_id=1){
   return {id,stage,turn_id,model:stage==='tts'?'fishaudio/drama-3':'live-character',payload:{model:'live-character',
@@ -36,6 +37,7 @@ test('button opens a native dialog with an honest empty state before any call',(
   assert.equal(nodes['model-inspector'].open,true);
   assert.match(nodes['inspection-empty'].textContent,/Start a call/);
   assert.equal(nodes['copy-inspection'].disabled,true);assert.deepEqual(sent,[]);
+  assert.equal(nodes['download-inspection'].disabled,true);assert.equal(nodes['download-inspection-recent'].disabled,true);
   inspector.setConnected(true);
   assert.deepEqual(sent,[{type:'inspect',enabled:true}]);
   assert.match(nodes['inspection-empty'].textContent,/No model requests captured/);
@@ -62,7 +64,7 @@ test('captured actor request preserves roles, exact text and generation settings
   assert.equal(nodes['inspection-status'].textContent,'Request JSON copied.');
 });
 
-test('stage selector can inspect previous director and emotion requests while the latest request updates',()=>{
+test('stage selector holds an explicitly chosen request until Show latest is pressed',()=>{
   const {inspector,nodes}=setup();inspector.setConnected(true);
   inspect(inspector,[request(1,'director'),request(2,'trigger'),request(3,'actor')]);
   assert.equal(inspector.selectedId,3);
@@ -74,7 +76,10 @@ test('stage selector can inspect previous director and emotion requests while th
   assert.equal(inspector.selectedId,1); // Do not interrupt someone reading an older prompt.
   nodes['inspection-request'].value='4';nodes['inspection-request'].dispatch('change');
   inspect(inspector,[request(4,'tts'),request(5,'director',2)]);
-  assert.equal(inspector.selectedId,5); // Follow the latest until another request is selected.
+  assert.equal(inspector.selectedId,4);
+  assert.match(nodes['inspection-updates'].textContent,/1 newer request available/);
+  nodes['inspection-latest'].dispatch('click');
+  assert.equal(inspector.selectedId,5);assert.equal(nodes['inspection-latest'].disabled,true);
 });
 
 test('voice view shows exact emotional cue, reference transcript and omitted-audio metadata',async()=>{
@@ -99,7 +104,8 @@ test('malicious prompt markup stays literal text and malformed snapshots are ign
   inspector.accept({type:'unrelated',requests:[]});assert.equal(inspector.requests.length,1);
   inspector.accept({type:'model_inspection',requests:null});assert.equal(inspector.requests.length,1);
   inspect(inspector,[null,{id:'x',turn_id:1,stage:'actor',payload:{}},{id:9,turn_id:1,stage:'unknown',model:'x',payload:{}}]);
-  assert.equal(inspector.requests.length,0);assert.equal(nodes['inspection-empty'].hidden,false);
+  assert.equal(inspector.requests.length,0);assert.equal(nodes['inspection-empty'].hidden,true);
+  assert.equal(sections(nodes)[0].text,unsafe); // Malformed updates cannot erase a held selection.
 });
 
 test('copy failure reveals selectable JSON without breaking the conversation',async()=>{
@@ -116,18 +122,23 @@ test('disconnect and new-call reset clear request text and reject late snapshots
   inspector.setConnected(false);
   assert.deepEqual(inspector.requests,[]);assert.equal(nodes['inspection-json'].textContent,'');
   assert.deepEqual(nodes['inspection-messages'].children,[]);assert.equal(nodes['copy-inspection'].disabled,true);
+  assert.equal(nodes['download-inspection'].disabled,true);assert.equal(nodes['download-inspection-recent'].disabled,true);
   inspect(inspector,[request()]);assert.deepEqual(inspector.requests,[]);
   inspector.setConnected(true);inspect(inspector,[request()]);finishCopy();await copying;
   assert.equal(nodes['inspection-status'].textContent,'');
   inspector.reset();assert.equal(nodes['inspection-model'].textContent,'');
 });
 
-test('request retention stays bounded and a pruned selection falls back to the latest request',()=>{
+test('a pruned selection stays readable beside a bounded recent list until Show latest',()=>{
   const {inspector,nodes}=setup();inspector.setConnected(true);
   inspect(inspector,[request(1)]);nodes['inspection-request'].value='1';nodes['inspection-request'].dispatch('change');
   inspect(inspector,Array.from({length:30},(_,index)=>request(index+2,'actor',Math.floor(index/3)+1)));
-  assert.equal(inspector.requests.length,24);assert.equal(inspector.selectedId,31);
-  assert.equal(nodes['inspection-request'].children.length,24);
+  assert.equal(inspector.requests.length,24);assert.equal(inspector.selectedId,1);
+  assert.equal(nodes['inspection-request'].children.length,25);
+  assert.match(nodes['inspection-request'].children[0].textContent,/saved selection/);
+  assert.deepEqual(JSON.parse(nodes['inspection-json'].textContent),request(1).payload);
+  nodes['inspection-latest'].dispatch('click');
+  assert.equal(inspector.selectedId,31);assert.equal(nodes['inspection-request'].children.length,24);
 });
 
 test('an old running server explains that a restart is needed without sending unsupported commands',()=>{
@@ -142,6 +153,7 @@ test('omitted voice bytes and oversized requests remain explicit instead of pret
   const captured=request(2,'tts');captured.omitted_fields=['ref_audio'];captured.reference_audio={present:true,encoded_characters:40000};
   inspect(inspector,[captured]);assert.deepEqual(JSON.parse(sections(nodes)[0].text),['ref_audio']);
   inspect(inspector,[{...request(3,'director'),payload:{},notice:'This request exceeded the inspection size limit.'}]);
+  inspector.showLatest();
   assert.match(sections(nodes)[0].text,/exceeded the inspection size limit/);
   assert.equal(nodes['copy-inspection'].disabled,true);
 });
@@ -151,4 +163,82 @@ test('actual voice-retry requests are labelled without constructing an additiona
   const captured={...request(3,'tts'),phase:'voice_retry'};inspect(inspector,[captured]);
   assert.match(nodes['inspection-request'].children[0].textContent,/\(voice retry\)/);
   assert.deepEqual(JSON.parse(nodes['inspection-json'].textContent),captured.payload);
+});
+
+test('incoming requests leave selected detail nodes, scroll and copy feedback unchanged',async()=>{
+  const {inspector,nodes}=setup();inspector.setConnected(true);inspect(inspector,[request(1)]);
+  const originalSection=nodes['inspection-messages'].children[0],originalPre=originalSection.children[1];
+  originalPre.scrollTop=90;nodes['inspection-json'].scrollTop=70;nodes['model-inspector'].scrollTop=250;
+  nodes['inspection-raw'].open=true;
+  await inspector.copy();const builds=nodes['inspection-messages'].replaceCount;
+  inspect(inspector,[request(1),request(2,'tts'),request(3,'director',2)]);
+  assert.equal(inspector.selectedId,1);assert.equal(nodes['inspection-messages'].replaceCount,builds);
+  assert.equal(nodes['inspection-messages'].children[0],originalSection);
+  assert.equal(originalPre.scrollTop,90);assert.equal(nodes['inspection-json'].scrollTop,70);
+  assert.equal(nodes['model-inspector'].scrollTop,250);assert.equal(nodes['inspection-raw'].open,true);
+  assert.equal(nodes['inspection-status'].textContent,'Request JSON copied.');
+  assert.match(nodes['inspection-updates'].textContent,/2 newer requests available/);
+  inspector.open();assert.equal(nodes['inspection-messages'].children[0],originalSection);
+  nodes['inspection-latest'].dispatch('click');assert.equal(inspector.selectedId,3);
+  assert.notEqual(nodes['inspection-messages'].children[0],originalSection);
+  assert.equal(nodes['inspection-status'].textContent,'');assert.equal(nodes['model-inspector'].scrollTop,0);
+});
+
+test('the first captured latest request pins once, even when its source object later changes',()=>{
+  const {inspector,nodes}=setup();inspector.setConnected(true);
+  const first=request(1),latest=request(2,'director');inspect(inspector,[first,latest]);
+  const original=JSON.parse(JSON.stringify(latest));
+  latest.payload.messages[0].content='Changed outside the inspector.';
+  inspect(inspector,[latest,request(3,'actor')]);
+  assert.equal(inspector.selectedId,2);assert.deepEqual(inspector.selected(),original);
+  assert.deepEqual(JSON.parse(nodes['inspection-json'].textContent),original.payload);
+  nodes['inspection-request'].value='3';nodes['inspection-request'].dispatch('change');
+  assert.equal(inspector.selectedId,3);
+});
+
+test('selected text download preserves the pinned prompt after newer requests prune it',async()=>{
+  const {inspector,nodes,files}=setup();inspector.setConnected(true);
+  const selected=request(1);selected.payload.messages[0].content='You are Anna. Montréal café — exact original instructions.';
+  inspect(inspector,[selected]);
+  inspect(inspector,[request(7,'director',3),request(8,'actor',3)]);
+  await inspector.downloadRequest();
+  assert.equal(files.length,1);assert.match(files[0].filename,/\.txt$/);
+  assert.equal(files[0].mime,'text/plain;charset=utf-8');
+  assert.match(files[0].content,/Montréal café — exact original instructions/);
+  assert.match(files[0].content,/What is my name\?/);
+  assert.equal(nodes['inspection-status'].textContent,'Request download started.');
+  let copied;inspector.writeText=async text=>{copied=text;};await inspector.copy();
+  assert.deepEqual(JSON.parse(copied),selected.payload);
+});
+
+test('recent JSON download is a current bounded log, separate from the older held selection',async()=>{
+  const {inspector,files}=setup();inspector.setConnected(true);inspect(inspector,[request(1)]);
+  const current=[request(5,'director',2),request(6,'actor',2)];inspect(inspector,current);
+  await inspector.downloadRecent();
+  assert.equal(files[0].filename,'character-studio-model-inputs.json');
+  assert.equal(files[0].mime,'application/json;charset=utf-8');
+  const exported=JSON.parse(files[0].content);assert.deepEqual(exported.requests,current);
+  assert.equal(inspector.selectedId,1);assert.equal(exported.requests.some(item=>item.id===1),false);
+});
+
+test('download failure gives a usable copy fallback and survives background updates',async()=>{
+  const {inspector,nodes}=setup(async()=>{},()=>{throw new Error('Downloads unavailable.');});
+  inspector.setConnected(true);inspect(inspector,[request(1)]);await inspector.downloadRequest();
+  assert.match(nodes['inspection-status'].textContent,/Use Copy request JSON/);
+  assert.equal(nodes['inspection-raw'].open,true);
+  inspect(inspector,[request(1),request(2,'tts')]);
+  assert.match(nodes['inspection-status'].textContent,/Use Copy request JSON/);
+  await inspector.downloadRecent();assert.match(nodes['inspection-status'].textContent,/Try again/);
+});
+
+test('ending a call clears pinned downloads and late completion messages cannot cross a new call',async()=>{
+  let finish;
+  const {inspector,nodes}=setup(async()=>{},()=>new Promise(resolve=>{finish=resolve;}));
+  inspector.setConnected(true);inspect(inspector,[request(1)]);const pending=inspector.downloadRequest();
+  inspector.setConnected(false);inspector.setConnected(true);inspect(inspector,[request(1,'director')]);
+  finish();await pending;assert.equal(nodes['inspection-status'].textContent,'');
+  inspector.reset();await inspector.downloadRequest();await inspector.downloadRecent();
+  assert.equal(inspector.selected(),null);assert.equal(nodes['download-inspection'].disabled,true);
+  assert.equal(nodes['download-inspection-recent'].disabled,true);assert.equal(nodes['inspection-latest'].disabled,true);
+  assert.equal(nodes['inspection-updates'].textContent,'');
 });

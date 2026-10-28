@@ -74,9 +74,10 @@
 </section></main>
 <dialog id="model-inspector" aria-labelledby="inspection-title" aria-describedby="inspection-description">
 <div class="inspection-heading"><h2 id="inspection-title">What the model sees</h2><button type="button" id="close-inspector" class="secondary" aria-label="Close model request inspector">Close</button></div>
-<p id="inspection-description" class="hint">Actual requests from this call, updated while this window is open. Voice audio files and connection details are omitted.</p>
+<p id="inspection-description" class="hint">Your selected request stays still while you read. Choose another request or Show latest to update it. Download a text copy or the recent request log. Voice audio files and connection details are omitted.</p>
 <p id="inspection-empty" class="inspection-empty"></p>
-<div id="inspection-controls" class="inspection-controls" hidden><label>Captured request<select id="inspection-request"></select></label><button type="button" id="copy-inspection" class="secondary" disabled>Copy request JSON</button></div>
+<div id="inspection-controls" class="inspection-controls" hidden><div class="inspection-selector"><label>Captured request<select id="inspection-request"></select></label><button type="button" id="inspection-latest" class="quiet" disabled>Show latest</button></div><div class="inspection-actions"><button type="button" id="download-inspection" class="secondary" disabled>Download request (.txt)</button><button type="button" id="download-inspection-recent" class="secondary" disabled>Download recent (.json)</button><button type="button" id="copy-inspection" class="quiet" disabled>Copy request JSON</button></div></div>
+<p id="inspection-updates" class="hint small" role="status" aria-live="polite"></p>
 <p id="inspection-status" class="hint small" role="status" aria-live="polite"></p>
 <div id="inspection-detail" hidden><p id="inspection-model" class="inspection-model"></p><div id="inspection-messages"></div><details id="inspection-raw"><summary>Request JSON</summary><pre id="inspection-json"></pre></details></div>
 </dialog>

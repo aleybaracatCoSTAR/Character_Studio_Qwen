@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 import time
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -19,6 +19,7 @@ from .reactions import EmotionalTrigger
 from .director import DirectorSettings
 from .narrative import NarrativeSettings, StoryControl
 from .deployment import profile
+from .inspection_downloads import ExportDownloads, MAX_EXPORT_BYTES
 
 
 def create_app(preview=False, providers=None, vad_factory=None):
@@ -33,12 +34,14 @@ def create_app(preview=False, providers=None, vad_factory=None):
                                           llm_model=os.environ.get("LIVE_LLM_MODEL", "live-character"),
                                           director_timeout=os.environ.get("LIVE_DIRECTOR_TIMEOUT",deployment["director_timeout"]))
     call_lock = asyncio.Lock()
+    downloads = ExportDownloads()
 
     @asynccontextmanager
     async def lifespan(app):
         task = asyncio.create_task(asyncio.to_thread(services.stt.load)) if not preview else None
         yield
         if task and not task.done(): task.cancel()
+        downloads.clear()
         await services.close()
 
     app = FastAPI(title="Character Studio · Live voice", lifespan=lifespan)
@@ -72,12 +75,47 @@ def create_app(preview=False, providers=None, vad_factory=None):
         return {"preview":preview,"ready":all(health.values()),"services":health,
                 "voice_pipeline":"responsive-context-v4",
                 "model_inspection":True,
+                "inspection_download":True,
                 "beat_entry_replies":True, "voice_retry":True,
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
                 "models":{"actor":deployment['actor']['id'],"director":(deployment['director'] or deployment['actor'])['id']},
                 "director":{"model":getattr(services,"director_model","live-character"),
                             "shared_model":getattr(services,"director_url",None)==getattr(services,"llm_url",None) and getattr(services,"director_model","live-character")=="live-character"}}
+
+    @app.post('/api/inspection/downloads')
+    async def prepare_inspection_download(request: Request):
+        expected = str(request.base_url).rstrip('/')
+        if request.headers.get('origin') != expected:
+            raise HTTPException(status_code=403,detail='Open the studio in its own browser tab.')
+        if request.headers.get('content-type','').split(';',1)[0].lower() != 'application/json':
+            raise HTTPException(status_code=400,detail='Use a model-input download request.')
+        data = bytearray()
+        async for chunk in request.stream():
+            data.extend(chunk)
+            if len(data) > MAX_EXPORT_BYTES:
+                raise HTTPException(status_code=413,detail='The model-input download is too large.')
+        try:
+            values = json.loads(data)
+            if not isinstance(values,dict): raise ValueError()
+            token = downloads.create(values.get('filename'),values.get('content'),values.get('mime'))
+        except OverflowError:
+            raise HTTPException(status_code=413,detail='The model-input download is too large.') from None
+        except (ValueError,TypeError,UnicodeError):
+            raise HTTPException(status_code=400,detail='Choose a valid text or JSON model-input download.') from None
+        return {'download_url':'/api/inspection/downloads/'+token}
+
+    @app.get('/api/inspection/downloads/{token}')
+    async def get_inspection_download(token: str, request: Request):
+        origin = request.headers.get('origin')
+        if origin and origin != str(request.base_url).rstrip('/'):
+            raise HTTPException(status_code=403,detail='Open the studio in its own browser tab.')
+        export = downloads.get(token)
+        if export is None:
+            raise HTTPException(status_code=404,detail='This download expired. Download the request again from the viewer.')
+        return Response(export['content'],media_type=export['mime']+';charset=utf-8',headers={
+            'Content-Disposition':'attachment; filename="'+export['filename']+'"',
+            'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
     @app.websocket("/api/live")
     async def live(socket: WebSocket):

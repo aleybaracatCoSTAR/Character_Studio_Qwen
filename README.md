@@ -8,7 +8,7 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 
 **Response timing and conversation context:** the live app now waits 400 ms of silence, starts recognition provisionally at 200 ms and reuses it only when the final audio matches exactly. Microphone packets are 40 ms. It sends twelve recent exchanges plus relevant older quotes to the character, with a bounded RAM archive for the current call. Ending the call clears that memory. Whole-reply emotional direction and voice validation are preserved. See [timing and memory details](docs/LIVE_SETUP.md); actual GPU latency improvement has not yet been measured.
 
-**Inspect model inputs:** choose **See what the model sees** beside the live conversation title to read the actual actor, director and voice requests, including conversation context and emotion cues. Select a recent request and copy its JSON for testing. [How the viewer works](docs/MODEL_INPUTS.md).
+**Inspect and download model inputs:** choose **See what the model sees** beside the live conversation title. Your selected request stays still until you choose another or **Show latest**. **Download request (.txt)** saves its readable prompts, context and settings; **Download recent (.json)** saves the recent captured request log. Copying JSON is also available. [How the viewer works](docs/MODEL_INPUTS.md).
 
 **Beat replies and voice recovery:** entering a new narrative beat now prompts one character reply, waiting for participant speech and current playback to finish. Director controls start collapsed behind **Show director controls** so the transcript has more room. Temporary voice-service failures share one automatic retry with incomplete takes; **Retry voice** can then regenerate the existing reply's audio with its original wording and delivery, without rerunning the actor or director.
 
@@ -83,7 +83,7 @@ node --test tests/*.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-249 Python tests and 47 JavaScript tests exercise app contracts, beat-entry replies, voice recovery, actual model-input inspection, protected turn-taking, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
+262 Python tests and 78 JavaScript tests exercise model-input exports and stable reading, app contracts, beat-entry replies, voice recovery, actual model-input inspection, protected turn-taking, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 
