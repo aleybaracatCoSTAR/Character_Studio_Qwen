@@ -6,6 +6,8 @@ This experimental mode connects **English speech recognition → director → Qw
 
 For the old demo's narrative pattern, open [Narrative beats](NARRATIVE.md). To use larger actor/director models across two or three allocated H200s, follow [Multi-GPU setup](MULTI_GPU.md). The commands below retain the compact one-GPU default.
 
+For the ready-made **KADEN** station character, pull and restart the live stack, refresh the page and use the Character picker above Name. Your existing browser character remains selected on first load and retains separate settings. End a call before switching. KADEN loads five manual narrative beats and a male voice reference. Follow the [Lighthouse quick test](KADEN.md) for caller cues and the operator-selected ending; no additional model downloads are needed.
+
 ## 1. Prepare on Surrey
 
 Use the terminal inside your allocated H200 job, in this repository. Stop earlier Qwen or Drama 3 servers with Ctrl+C before reusing the GPU. The launcher checks ports 18091–18093 and refuses to replace an existing server.

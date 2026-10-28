@@ -5,6 +5,7 @@ import {PromptInspector} from './live-inspector.mjs';
 import {VoiceRetry} from './live-voice-retry.mjs';
 import {DirectorPanel} from './live-director-panel.mjs';
 import {CallFeedback} from './live-feedback.mjs';
+import {CharacterLibrary} from './live-characters.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 let socket=null,context=null,stream=null,capture=null,playback=null,connecting=false,muted=false,ready=false,currentTurn=0;
@@ -12,6 +13,8 @@ let replyPending=false,resumeTimer=null;
 let referenceURL=null;
 let triggerActive=false;
 let sessionReady=false,disconnecting=null;
+let characterLibrary=null,profileStorage=null,loadingProfile=false;
+let libraryHint='Each character keeps its own settings. End the call before switching.';
 const conversation=new Conversation($('messages'),$('empty-state'));
 const callFeedback=new CallFeedback($('feedback'));
 const inspector=new PromptInspector({document,send});
@@ -33,8 +36,8 @@ const storyEditor=new StoryEditor($('beat-editor'),saveStory);
 function narrativeSettings(){return {enabled:$('story-enabled').checked,mode:$('story-mode').value,beats:storyEditor.values()};}
 function saveStory(){
   $('story-settings').hidden=!$('story-enabled').checked;
-  try{localStorage.setItem('live-story-v1',JSON.stringify(narrativeSettings()));}catch(error){}
   if(!socket)previewStory();
+  saveActiveProfile();
 }
 function previewStory(){
   const settings=narrativeSettings();
@@ -62,6 +65,60 @@ function storyControls(){
   $('cue-beat').disabled=!live||storyView.finished||replyPending;
 }
 function character(){return Object.fromEntries(fields.map(key=>[key,form.elements[key].value]));}
+function capturedProfile(){return {character:character(),voice:{preset:$('voice-preset').value,...delivery()},
+  director:directorSettings(),trigger:triggerSettings(),narrative:narrativeSettings()};}
+function libraryNotice(){
+  $('character-library-note').textContent=libraryHint+(characterLibrary?.storageError?' Changes are kept for this page, but this browser could not save them.':'');
+}
+function characterOptions(){
+  if(!characterLibrary)return;
+  const picker=$('character-picker');picker.replaceChildren();
+  for(const profile of characterLibrary.list()){
+    const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name||'Untitled character';picker.append(option);
+  }
+  picker.value=characterLibrary.activeId;
+  $('load-story-example').hidden=!characterLibrary.preset()?.narrative.beats.length;
+  libraryNotice();
+}
+function saveActiveProfile(){
+  if(!characterLibrary||loadingProfile)return;
+  characterLibrary.save(capturedProfile());characterLibrary.writeLegacy();characterOptions();
+}
+function clearReference(){
+  $('voice-reference').value='';$('reference-text').value='';$('reference-audio').pause();$('reference-audio').removeAttribute('src');
+  if(referenceURL)URL.revokeObjectURL(referenceURL);referenceURL=null;$('reference-preview').hidden=true;
+}
+function applyProfile(profile){
+  loadingProfile=true;
+  try{
+    for(const key of fields)form.elements[key].value=profile.character[key]??'';
+    for(const [key,id] of [['preset','voice-preset'],['emotion','voice-emotion'],['event','voice-event'],['direction','voice-direction']])$(id).value=profile.voice[key];
+    $('director-enabled').checked=profile.director.enabled;$('director-input').value=profile.director.notes;
+    $('trigger-enabled').checked=!!profile.trigger;
+    for(const [key,id] of [['action','trigger-action'],['condition','trigger-condition'],['emotion','trigger-emotion'],['behaviour','trigger-behaviour'],['spoken_cue','trigger-cue'],['delivery','trigger-delivery']])$(id).value=profile.trigger?.[key]??(key==='emotion'?'anxious':'');
+    $('trigger-fields').hidden=!profile.trigger;$('test-trigger').textContent=profile.trigger?.action||'Test reaction';
+    storyEditor.load(profile.narrative.beats);$('story-enabled').checked=profile.narrative.enabled;$('story-mode').value=profile.narrative.mode;
+    $('story-settings').hidden=!profile.narrative.enabled;
+    clearReference();updateVoicePreset();
+    $('chat-title').textContent=`Talk to ${profile.character.name.trim()||'your character'}`;
+    clearTimeout(resumeTimer);replyPending=false;currentTurn=0;triggerActive=false;
+    playback?.clear();conversation.reset();inspector.reset();voiceRetry.clear();directorPanel.resetNote();
+    if($('model-inspector').open)$('model-inspector').close();
+    $('director-latest').hidden=true;$('director-note').textContent='';$('timing').textContent='';
+    $('typed-form').hidden=true;$('typed-message').value='';$('trigger-state').textContent='Start a call to test the reaction.';
+    feedback();state('Ready when you are');previewStory();characterLibrary.writeLegacy();characterOptions();controls();
+  }finally{loadingProfile=false;}
+}
+async function loadCharacterLibrary(){
+  let presets=[];
+  try{
+    const response=await fetch('/api/characters/presets');if(!response.ok)throw new Error('Presets unavailable.');
+    const data=await response.json();if(!Array.isArray(data))throw new Error('Presets unavailable.');presets=data;
+  }catch(error){libraryHint='Your saved character is available. Update and restart the studio server to add KADEN.';}
+  try{profileStorage=localStorage;}catch(error){}
+  characterLibrary=new CharacterLibrary({storage:profileStorage,current:capturedProfile(),presets});
+  applyProfile(characterLibrary.active());
+}
 function feedback(message='',kind='general'){callFeedback.show(message,kind);}
 function state(message){$('call-state').textContent=message;}
 function send(value){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(value));}
@@ -89,6 +146,7 @@ function resumeMicrophone(){
 }
 function controls(){
   const connected=socket?.readyState===WebSocket.OPEN;
+  $('character-picker').disabled=!!connected||connecting||!characterLibrary;
   $('start-call').disabled=connecting||(!connected&&!ready);$('start-call').classList.toggle('connected',!!connected);
   $('start-call').querySelector('span').textContent=connected?'End session':connecting?'Connecting…':'Start call';
   $('mute').hidden=!connected||!stream;$('interrupt').hidden=!connected;
@@ -209,11 +267,18 @@ $('mute').addEventListener('click',()=>{muted=!muted;if(stream)stream.getAudioTr
 $('interrupt').addEventListener('click',()=>{playback?.clear();send({type:'interrupt'});resumeMicrophone();});
 $('typed-form').addEventListener('submit',e=>{e.preventDefault();const text=$('typed-message').value.trim();if(text){holdMicrophone();send({type:'text',text});$('typed-message').value='';feedback();}});
 $('toggle-profile').addEventListener('click',()=>{form.hidden=!form.hidden;$('toggle-profile').setAttribute('aria-expanded',String(!form.hidden));$('toggle-profile').textContent=form.hidden?'Show details':'Hide details';});
-form.addEventListener('input',()=>{const name=form.elements.name.value.trim()||'your character';$('chat-title').textContent=`Talk to ${name}`;try{localStorage.setItem('live-character-v1',JSON.stringify(character()));}catch(error){}});
+form.addEventListener('input',()=>{const name=form.elements.name.value.trim()||'your character';$('chat-title').textContent=`Talk to ${name}`;});
+form.addEventListener('input',saveActiveProfile);
+form.addEventListener('change',saveActiveProfile);
+$('character-picker').addEventListener('change',()=>{
+  if(!characterLibrary)return;
+  if(connecting||socket){characterOptions();return;}
+  const selected=characterLibrary.switchTo($('character-picker').value,capturedProfile());
+  if(selected)applyProfile(selected);
+});
 for(const id of ['voice-emotion','voice-event','voice-direction'])$(id).addEventListener('change',()=>{
   const settings=delivery();send({type:'delivery',settings});
   $('delivery-note').textContent=socket?'Delivery updated for the next reply.':'Delivery set for your next call.';
-  try{localStorage.setItem('live-delivery-v1',JSON.stringify(settings));}catch(error){}
 });
 function updateVoicePreset(){
   const preset=$('voice-preset').value;
@@ -224,7 +289,7 @@ function updateVoicePreset(){
   else $('preset-audio').removeAttribute('src');
 }
 $('voice-preset').addEventListener('change',()=>{
-  updateVoicePreset();try{localStorage.setItem('live-voice-preset-v1',$('voice-preset').value);}catch(error){}
+  updateVoicePreset();
 });
 $('voice-reference').addEventListener('change',()=>{
   if(referenceURL)URL.revokeObjectURL(referenceURL);referenceURL=null;
@@ -233,31 +298,26 @@ $('voice-reference').addEventListener('change',()=>{
   else if(file){referenceURL=URL.createObjectURL(file);$('reference-audio').src=referenceURL;feedback();}
   $('reference-preview').hidden=!referenceURL;
 });
-$('clear-reference').addEventListener('click',()=>{
-  $('voice-reference').value='';$('reference-text').value='';$('reference-audio').removeAttribute('src');
-  if(referenceURL)URL.revokeObjectURL(referenceURL);referenceURL=null;$('reference-preview').hidden=true;
-});
+$('clear-reference').addEventListener('click',clearReference);
 for(const id of ['trigger-enabled','trigger-action','trigger-condition','trigger-emotion','trigger-behaviour','trigger-cue','trigger-delivery'])$(id).addEventListener('input',()=>{
   $('trigger-fields').hidden=!$('trigger-enabled').checked;$('test-trigger').textContent=$('trigger-action').value||'Test reaction';controls();
-  try{localStorage.setItem('live-trigger-v1',JSON.stringify(triggerSettings()));}catch(error){}
 });
 $('test-trigger').addEventListener('click',()=>{holdMicrophone();send({type:'trigger'});});
 $('clear-trigger').addEventListener('click',()=>send({type:'clear_trigger'}));
 $('send-direction').addEventListener('click',()=>{const settings=directorSettings();send({type:'director',settings});
-  try{localStorage.setItem('live-director-v1',JSON.stringify(settings));}catch(error){}
+  saveActiveProfile();
   if(!socket)feedback('Direction saved for your next call.');
 });
 for(const id of ['story-enabled','story-mode'])$(id).addEventListener('change',saveStory);
 $('add-beat').addEventListener('click',()=>{storyEditor.add();controls();});
-$('load-story-example').addEventListener('click',async()=>{
-  const settings=await(await fetch('/api/story/example')).json();storyEditor.load(settings.beats);
-  $('story-enabled').checked=true;$('story-mode').value=settings.mode;saveStory();controls();
+$('load-story-example').addEventListener('click',()=>{
+  const settings=characterLibrary?.preset()?.narrative;if(!settings)return;
+  storyEditor.load(settings.beats);$('story-enabled').checked=settings.enabled;$('story-mode').value=settings.mode;saveStory();controls();
 });
 for(const [id,action] of [['next-beat','next'],['previous-beat','previous'],['cue-beat','cue']])$(id).addEventListener('click',()=>send({type:'story',control:{action}}));
 $('hold-story').addEventListener('click',()=>send({type:'story',control:{action:storyView?.paused?'resume':'pause'}}));
 for(const id of ['director-enabled','director-input'])$(id).addEventListener('change',()=>{
   const settings=directorSettings();send({type:'director',settings});
-  try{localStorage.setItem('live-director-v1',JSON.stringify(settings));}catch(error){}
 });
 async function status(){
   try{
@@ -298,10 +358,11 @@ async function init(){
   $('chat-title').textContent=`Talk to ${form.elements.name.value}`;
   if(matchMedia('(max-width:650px)').matches){form.hidden=true;$('toggle-profile').textContent='Show details';$('toggle-profile').setAttribute('aria-expanded','false');}
   let script;try{script=JSON.parse(localStorage.getItem('live-story-v1'));}catch(error){}
-  if(!script){script=await(await fetch('/api/story/example')).json();script.enabled=initial.name.toLowerCase()==='anna';}
+  if(!script){script=initial.name.toLowerCase()==='anna'?await(await fetch('/api/story/example')).json():{enabled:false,mode:'manual',beats:[]};}
   storyEditor.load(Array.isArray(script.beats)?script.beats:[]);$('story-enabled').checked=!!script.enabled;
   if(['manual','timed','director'].includes(script.mode))$('story-mode').value=script.mode;
   $('story-settings').hidden=!$('story-enabled').checked;previewStory();
+  await loadCharacterLibrary();
   await status();setInterval(status,5000);
 }
 window.addEventListener('beforeunload',()=>{if(stream)stream.getTracks().forEach(track=>track.stop());if(referenceURL)URL.revokeObjectURL(referenceURL);socket?.close();});

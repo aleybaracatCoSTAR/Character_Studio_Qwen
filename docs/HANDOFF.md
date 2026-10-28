@@ -1,4 +1,12 @@
-# Latest change: stable prompt snapshots and downloadable inputs, 28 October 2026
+# Latest change: KADEN preset and separate character settings, 28 October 2026
+
+The live sidebar now includes a Character picker. First load migrates the actual existing browser character without replacing it with an invented Karim definition; KADEN is a separate authored preset. Profile, delivery, director, trigger and narrative settings persist per character. Switching is disabled during a call, clears stale conversation/inspector state, and clears uploaded reference files. Files and reference transcripts are not persisted. Failed browser storage writes show a warning and do not overwrite the surviving legacy character before the complete library is saved.
+
+KADEN uses the existing schemas and three JSON files in `characters/`, exposed through read-only `/api/characters/presets` and `/api/characters/presets/kaden`. It has a supported male Drama 3 reference, empty Memories, five manual beats and no Anna reset trigger. Its infection belief is revisable; its stable-pods cover story is a known lie. Later player truths are not preloaded. The static situation defers to the current beat instead of repeatedly imposing opening instructions. The performer chooses one ending and controls timing; there is no automatic 6:30 hard stop. See [KADEN quick test](KADEN.md).
+
+275 Python and 93 JavaScript tests pass. Local browser checks confirmed switching away and back preserves an existing test profile, including after refresh, and that KADEN loads its male voice and five manual beats. No models were called for this update. Pull and restart the live stack to serve the preset API; no new weights or setup are required.
+
+# Previous change: stable prompt snapshots and downloadable inputs, 28 October 2026
 
 The inspector now pins one independent selected request until explicit selection or **Show latest**. Incoming snapshots update only the bounded request list and newer-request indicator; detail DOM, scroll and copy/download status stay unchanged. A selected request pruned from the recent list remains labelled **saved selection** and exportable until disconnect/new call. **Download request (.txt)** includes role-labelled prompts, context, voice cue/reference transcript, generation settings, exact request JSON and omissions. **Download recent (.json)** exports the bounded recent list with ID/turn/stage/phase metadata and export time; it does not silently add a pruned held selection.
 

@@ -20,6 +20,7 @@ from .director import DirectorSettings
 from .narrative import NarrativeSettings, StoryControl
 from .deployment import profile
 from .inspection_downloads import ExportDownloads, MAX_EXPORT_BYTES
+from .presets import preset, presets
 
 
 def create_app(preview=False, providers=None, vad_factory=None):
@@ -58,6 +59,14 @@ def create_app(preview=False, providers=None, vad_factory=None):
     @app.get("/api/example")
     def character(): return example().model_dump()
 
+    @app.get('/api/characters/presets')
+    def character_presets(): return presets()
+
+    @app.get('/api/characters/presets/{preset_id}')
+    def character_preset(preset_id: str):
+        try: return preset(preset_id)
+        except KeyError: raise HTTPException(status_code=404,detail='Character preset not found.') from None
+
     @app.get("/api/story/example")
     def story_example():
         path=Path(__file__).resolve().parent.parent/'characters/anna-story.json'
@@ -76,6 +85,7 @@ def create_app(preview=False, providers=None, vad_factory=None):
                 "voice_pipeline":"responsive-context-v4",
                 "model_inspection":True,
                 "inspection_download":True,
+                "character_presets":True,
                 "beat_entry_replies":True, "voice_retry":True,
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
