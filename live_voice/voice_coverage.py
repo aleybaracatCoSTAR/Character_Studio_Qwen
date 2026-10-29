@@ -134,6 +134,14 @@ def _ordered_matches(expected,heard):
     return int(rows[-1][-1]),positions
 
 
+def normalized_prefix(expected, heard):
+    """Whether recognized lexical words are an actual initial expected sequence."""
+    expected, heard = _words(expected), _words(heard)
+    if len(expected)>MAX_EXPECTED_WORDS or len(heard)>MAX_HEARD_WORDS:
+        raise ValueError('Speech comparison exceeds its bounded word limit.')
+    return bool(heard) and len(heard)<=len(expected) and expected[:len(heard)]==heard
+
+
 def compare_speech(expected,heard):
     """Compare ordered word overlap; this does not establish semantic accuracy."""
     expected = _words(expected)
