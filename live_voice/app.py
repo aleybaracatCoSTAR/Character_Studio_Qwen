@@ -21,9 +21,11 @@ from .narrative import NarrativeSettings, StoryControl
 from .deployment import profile
 from .inspection_downloads import ExportDownloads, MAX_EXPORT_BYTES
 from .presets import preset, presets
+from .archive import ArchiveSettings, ArchiveStore
+from .archive_source import QueeringTheMap, ArchiveSourceUnavailable, qtm_entry_id
 
 
-def create_app(preview=False, providers=None, vad_factory=None):
+def create_app(preview=False, providers=None, vad_factory=None, archive_store=None, archive_importer=None):
     deployment = profile()
     public = Path(__file__).resolve().parent.parent / "frontend"
     services = providers or LocalProviders(SpeechRecognition(os.environ.get("LIVE_STT_MODEL_DIR"),
@@ -33,9 +35,15 @@ def create_app(preview=False, providers=None, vad_factory=None):
                                           director_url=os.environ.get("LIVE_DIRECTOR_URL"),
                                           director_model=os.environ.get("LIVE_DIRECTOR_MODEL", "live-character"),
                                           llm_model=os.environ.get("LIVE_LLM_MODEL", "live-character"),
-                                          director_timeout=os.environ.get("LIVE_DIRECTOR_TIMEOUT",deployment["director_timeout"]))
+                                          director_timeout=os.environ.get("LIVE_DIRECTOR_TIMEOUT",deployment["director_timeout"]),
+                                          verify_voice=os.environ.get('LIVE_VERIFY_VOICE','1') != '0',
+                                          verification_timeout=os.environ.get('LIVE_VOICE_VERIFY_TIMEOUT','20'))
     call_lock = asyncio.Lock()
     downloads = ExportDownloads()
+    archive_store = archive_store or ArchiveStore(Path(os.environ.get('LIVE_ARCHIVE_DIR') or
+        str(Path(os.environ.get('LIVE_VOICE_STORE', str(Path.home() / '.local/share/character-studio'))) / 'archive')))
+    archive_importer = archive_importer or QueeringTheMap()
+    archive_write_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -55,6 +63,73 @@ def create_app(preview=False, providers=None, vad_factory=None):
 
     @app.get("/")
     def index(): return FileResponse(public / "live.html")
+
+    @app.get('/archive/')
+    def archive_index(): return FileResponse(public / 'live.html')
+
+    def require_archive_origin(request):
+        if request.headers.get('origin') != str(request.base_url).rstrip('/'):
+            raise HTTPException(status_code=403,detail='Open the studio in its own browser tab.')
+
+    def read_archive():
+        try: return archive_store.list()
+        except (OSError, ValueError):
+            raise HTTPException(status_code=503,detail='The selected-story archive could not be read. Check its local storage.') from None
+
+    @app.get('/api/archive/entries')
+    def archive_entries(): return {'entries':read_archive(),'limit':50,'scope':'selected'}
+
+    @app.post('/api/archive/entries', status_code=201)
+    async def add_archive_entry(request: Request):
+        require_archive_origin(request)
+        if request.headers.get('content-type','').split(';',1)[0].strip().lower() != 'application/json':
+            raise HTTPException(status_code=400,detail='Use an archive story request.')
+        body = bytearray()
+        async for packet in request.stream():
+            body.extend(packet)
+            if len(body) > 64 * 1024:
+                raise HTTPException(status_code=413,detail='The selected story is too large.')
+        try:
+            values = json.loads(body)
+            if not isinstance(values,dict) or set(values) - {'entry_id','title','text','source_url'}:
+                raise ValueError()
+            if any(not isinstance(value,str) for value in values.values()): raise ValueError()
+            if 'entry_id' in values:
+                if any(values.get(key,'').strip() for key in ('title','text','source_url')): raise ValueError()
+                entry_id = qtm_entry_id(values['entry_id'])
+            else:
+                if not values.get('text','').strip(): raise ValueError()
+                values['source_url'] = values.get('source_url','').strip() or 'https://www.queeringthemap.com/'
+                entry_id = None
+        except (ValueError, TypeError, UnicodeError):
+            raise HTTPException(status_code=400,detail='Choose one story number/entry URL, or paste a story with its Queering the Map source.') from None
+        async with archive_write_lock:
+            if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before changing its archive.')
+            try:
+                entry = await archive_importer.fetch(entry_id) if entry_id is not None else values
+                if entry_id is not None: entry = {**entry,'provenance':'fetched'}
+                if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before changing its archive.')
+                saved = archive_store.add(**entry)
+                return {'entry':saved,'entries':archive_store.list()}
+            except ArchiveSourceUnavailable:
+                raise HTTPException(status_code=502,detail='That story could not be read from Queering the Map. Check its number, or paste a selected story instead.') from None
+            except OverflowError:
+                raise HTTPException(status_code=413,detail='This archive is full or the story is too long. Remove a story before adding more.') from None
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400,detail='Use a nonempty story, a short title and a valid Queering the Map source URL.') from None
+            except OSError:
+                raise HTTPException(status_code=503,detail='The story could not be saved to the local archive.') from None
+
+    @app.delete('/api/archive/entries/{entry_id}')
+    async def remove_archive_entry(entry_id: str, request: Request):
+        require_archive_origin(request)
+        async with archive_write_lock:
+            if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before changing its archive.')
+            try:
+                if not archive_store.remove(entry_id): raise HTTPException(status_code=404,detail='Story not found.')
+                return {'entries':archive_store.list()}
+            except (ValueError, OSError):
+                raise HTTPException(status_code=503,detail='The story could not be removed from the local archive.') from None
 
     @app.get("/api/example")
     def character(): return example().model_dump()
@@ -86,7 +161,9 @@ def create_app(preview=False, providers=None, vad_factory=None):
                 "model_inspection":True,
                 "inspection_download":True,
                 "character_presets":True,
+                "archive":{"available":True,"scope":"selected","limit":50},
                 "beat_entry_replies":True, "voice_retry":True,
+                "voice_verification":bool(getattr(services,'verify_voice',False)),
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
                 "models":{"actor":deployment['actor']['id'],"director":(deployment['director'] or deployment['actor'])['id']},
@@ -157,13 +234,20 @@ def create_app(preview=False, providers=None, vad_factory=None):
             trigger = EmotionalTrigger.model_validate(config["trigger"]) if config.get("trigger") is not None else None
             director = DirectorSettings.model_validate(config.get("director", {}))
             narrative = NarrativeSettings.model_validate(config.get("narrative", {}))
+            archive = ArchiveSettings.model_validate(config.get('archive', {}))
+            try:
+                archive_entries = archive_store.snapshot(archive.entry_ids) if archive.enabled else ()
+            except (KeyError, ValueError, OSError):
+                await send_json({'type':'error','message':'The selected archive changed. End the call, check its stories and try again.'})
+                return
             if vad_factory:
                 detector = vad_factory()
             else:
                 import webrtcvad
                 vad = webrtcvad.Vad(2)
                 detector = TurnDetector(lambda pcm:vad.is_speech(pcm,16000))
-            session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director, narrative=narrative)
+            session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director,
+                                  narrative=narrative, archive=archive if archive.enabled else None, archive_entries=archive_entries)
             listen_after = 0.0
             def clear_microphone():
                 detector.pending.clear(); detector.reset()

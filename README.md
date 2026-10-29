@@ -12,7 +12,11 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 
 **KADEN is ready to rehearse:** select **KADEN** in the live sidebar's Character picker. Your existing saved character, including Karim, stays a separate choice with its own voice, director and story settings. KADEN includes a male voice reference and five performer-controlled beats adapted from the Lighthouse run sheet. [Quick test and ending cues](docs/KADEN.md).
 
+**Character + archive:** open `/archive/` for **Mika**, an editable character that consults selected [Queering the Map](https://www.queeringthemap.com/) stories during voice or text conversation. Add an individual entry or paste a selected passage; relevant excerpts and source links appear beside the reply. The character interface stays intact, and the normal Karim/KADEN view keeps its separate saved settings. This first version searches the stories you add, not the entire map. [Setup, limits and attribution](docs/ARCHIVE.md).
+
 **Beat replies and voice recovery:** entering a new narrative beat now prompts one character reply, waiting for participant speech and current playback to finish. Director controls start collapsed behind **Show director controls** so the transcript has more room. Temporary voice-service failures share one automatic retry with incomplete takes; **Retry voice** can then regenerate the existing reply's audio with its original wording and delivery, without rerunning the actor or director.
+
+**Voice completion now checks spoken coverage:** the live app uses its existing recognizer to catch substantial missing speech before playback, including a completed response that contains only the opening sentence. Rejected takes share the same two-attempt limit and keep their emotion/reference. Failures now include a specific safe reason code; automatic voice anchoring excludes invalid-duration and rejected takes. This adds a recognition step and is not a cure for Drama 3's documented generation limitations. [Failure diagnosis and limits](docs/VOICE_FAILURES.md).
 
 **Status: starter prototype.** CPU transport tests and browser checks pass. A short standalone Drama 3 synthesis succeeded on Surrey through the Mac SSH tunnel on 23 October 2026; [details](experiments/drama3/README.md#validation). The full live stack, combined H200 memory use, spoken quality and live response time still need validation. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
 
@@ -85,7 +89,7 @@ node --test tests/*.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-275 Python tests and 93 JavaScript tests exercise authored character presets and profile preservation, model-input exports and stable reading, app contracts, beat-entry replies, voice recovery, actual model-input inspection, protected turn-taking, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
+368 Python tests and 113 JavaScript tests exercise selected-story retrieval and provenance, spoken coverage and safe voice diagnostics, authored character presets and profile preservation, model-input exports and stable reading, app contracts, beat-entry replies, voice recovery, actual model-input inspection, protected turn-taking, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

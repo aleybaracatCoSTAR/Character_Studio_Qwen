@@ -1,0 +1,47 @@
+# Diagnosing an unfinished Drama 3 voice take
+
+`VoiceTakeIncomplete` means the app could not validate a complete, uncapped voice response. It does not identify the cause by itself, and it does not mean speech recognition or the character's text generation failed. The app buffers a whole reply until Drama 3 confirms completion, so a rejected take is not played as cut-off audio.
+
+## Find the reason
+
+After updating and restarting, the portal message includes a fixed reason such as `[token_limit]` or `[upstream_error]`. The app terminal also writes a `Voice take failed:` record for each attempt, with the safe counters available: requested/output tokens, received audio seconds/chunks, completion status, elapsed time and allowlisted service status. The final call error includes the same structured `voice_diagnostic`. Submitted text, reference transcripts, audio, URLs and arbitrary upstream error messages are excluded from these records.
+
+| Reason | What it means |
+|---|---|
+| `token_limit` | Generation reached its requested token budget or explicitly reported a length stop; completion is not trusted. |
+| `audio_limit` | Audio exceeded the bounded amount allowed for this request. |
+| `upstream_error` | Drama 3 explicitly sent an error; the TTS log is needed for its underlying engine cause. |
+| `missing_done` / `unfinished_event` | The stream ended without a complete final event. |
+| `empty_audio` / `malformed_audio` | No usable PCM take was returned. |
+| `missing_usage` | The server did not provide the token-usage confirmation expected by this client. |
+| `transport_timeout` / `transport_network` | The voice request timed out or its connection failed. |
+| `http_status` | The voice service rejected the request; inspect its TTS log and status code. |
+| `pcm_format` / `content_type` | The service did not return the required PCM/completion-event protocol. |
+| `speech_mismatch` | Recognition of the completed take did not cover enough of the requested words; a substantial omission or early stop was detected. |
+| `verification_unavailable` | The audio was generated but its recognition check failed or timed out; unchecked audio was withheld. |
+
+In the allocated Surrey GPU terminal, capture the service log immediately after a failed reply:
+
+```bash
+tail -n 80 /scratch4weeks/$USER/live-voice-store/logs/tts.log
+```
+
+Keep the matching `Voice take failed:` line from the app terminal as well. These two records distinguish a local validation rejection from a voice-server failure. An earlier log containing only `Live turn failed (VoiceTakeIncomplete)` cannot establish which cause occurred.
+
+An HTTP 200 response for a streaming request only confirms that the request was accepted. A later error or incomplete spoken take can still follow. A service log saying `cancelled by client` establishes cancellation, not a GPU-memory failure: an explicit Stop reply, a new turn, disconnect or a local rejection can close the request. Match the request time to the app's reason code before assigning a cause.
+
+The [official vLLM Drama 3 recipe](https://recipes.vllm.ai/fishaudio/drama-3) also describes a model limitation where leading event/delivery tags or fillers can produce only an initial word/event followed by silence. This is a plausible contributor to early-word failures, not proof of an individual request's cause. The app does not silently remove the selected emotion or move it between sentences as a recovery strategy.
+
+## What this update fixes
+
+The old fixed 4 MiB PCM bound was about 47.6 seconds at 44.1 kHz mono PCM16, while the existing 1,600-token request ceiling could allow a longer take. The byte bound now scales with the request's codec-frame budget, using the pinned Fish model configuration's approximately 21.5 frames/second and a small margin. It retains a 4 MiB floor and an 8 MiB hard bound. A complete 49-second synthetic transport fixture is accepted; capped, malformed and unconfirmed takes are still discarded. This does not establish that a real model says every requested word correctly.
+
+The whole reply keeps one emotion and one voice reference. An incomplete take or transient service failure still receives at most one identical automatic retry. **Retry voice** regenerates the saved reply without asking the actor or director for different words. The app does not strip emotional direction to conceal a failed take.
+
+The live app now also uses its existing English speech recognizer to compare a completed take with the requested spoken text before releasing it. This catches substantial omissions such as a multi-sentence reply rendered as only its opening sentence, even if the protocol reports completion. A rejected take shares the same two-attempt limit; its text, emotion and reference stay fixed. Recognition runs locally, and its temporary transcript is not logged or stored. This is a conservative word-coverage check, not a proof of pronunciation or semantic accuracy: accents, names, multilingual speech and recognition errors can affect it, and minor skipped words can still pass. It adds a recognition step to voice preparation and does not repair an unreliable TTS model.
+
+Voice checking is enabled by default in the live app. `LIVE_VOICE_VERIFY_TIMEOUT` bounds its recognition wait (default 20 seconds); `LIVE_VERIFY_VOICE=0` disables that content check for a deliberate diagnostic comparison, leaving protocol checks active. This setting does not change the selected voice or emotional delivery. Direct low-level Drama 3 scripts still need their own listening check; the live app's validator is not a claim about every speech endpoint.
+
+Automatic voice anchoring accepts only a whole take lasting 1–30 seconds, matching the pinned upstream reference-duration rule. Shorter or longer audio is not cropped with a now-incorrect transcript and is not promoted as the next request's reference. The app waits for a suitable later take; built-in Female/Male and validated uploaded references retain their selected conditioning.
+
+No live GPU synthesis was performed for this update. The current user's repeated failures still need the service log and the new reason code to identify their cause; the corrected duration bound is not evidence that every failure came from that bound.

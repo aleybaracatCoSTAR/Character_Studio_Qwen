@@ -17,6 +17,26 @@ function kaden(){return {id:'kaden',character:{...current().character,name:'KADE
   voice:{preset:'male',emotion:'calm',event:'none',direction:'Preset delivery.'},director:{enabled:true,notes:'Preset direction.'},trigger:null,
   narrative:{enabled:true,mode:'manual',beats:Array.from({length:5},(_,index)=>({title:`Preset beat ${index+1}`,goal:`Goal ${index+1}`,note:`Private note ${index+1}`,emotion:'calm',delivery:'Steady.',min_seconds:0,max_seconds:90}))}};}
 
+test('archive profiles persist only selected entry IDs and cannot copy source text or reference bytes',()=>{
+  const data={...current(),archive:{enabled:true,entry_ids:['a'.repeat(32),'a'.repeat(32),'b'.repeat(32),'../bad'],text:'Private passage',reference_audio:'secret'}};
+  const profile=characterProfile(data,'test');
+  assert.deepEqual(profile.archive,{enabled:true,entry_ids:['a'.repeat(32),'b'.repeat(32)]});
+  assert.equal(JSON.stringify(profile).includes('Private passage'),false);
+  const library=new CharacterLibrary({storage:storage(),current:data,presets:[kaden()]});
+  const selected=library.switchTo('kaden');assert.equal(selected.archive,undefined);
+  assert.deepEqual(library.switchTo('local-character').archive,profile.archive);
+});
+
+test('the separate archive view cannot overwrite the main library or its surviving legacy character',()=>{
+  const saved=storage(),main=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()]});
+  main.writeLegacy();const before=saved.getItem(CHARACTER_LIBRARY_KEY),legacy=saved.getItem('live-character-v1');
+  const archive=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()],key:'live-archive-character-library-v1',legacyWrites:false});
+  archive.switchTo('kaden');assert.equal(archive.writeLegacy(),false);
+  assert.equal(saved.getItem(CHARACTER_LIBRARY_KEY),before);assert.equal(saved.getItem('live-character-v1'),legacy);
+  const reloaded=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()],key:'live-archive-character-library-v1',legacyWrites:false});
+  assert.equal(reloaded.activeId,'kaden');assert.equal(main.activeId,'local-character');
+});
+
 test('first migration preserves the actual current character and every setting without selecting the added preset',()=>{
   const saved=storage(),original=current();
   saved.setItem('live-character-v1',JSON.stringify(original.character));

@@ -1,9 +1,10 @@
 import asyncio
+import json
 import logging
 import struct
 import time
 
-from .providers import OUTPUT_RATE, VoiceTakeIncomplete, VoiceServiceUnavailable, synthetic_reference
+from .providers import OUTPUT_RATE, VoiceFailure, VoiceTakeIncomplete, VoiceServiceUnavailable, synthetic_reference
 from .director import DirectorSettings
 from .narrative import NarrativeState
 from .recognition import PreparedRecognition
@@ -11,12 +12,14 @@ from .inspection import RequestInspection
 from .voice import EMOTION_DIRECTIONS
 from .turns import ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
+from .archive import retrieve, grounding_messages
 
 logger = logging.getLogger(__name__)
 
 
 class LiveSession:
-    def __init__(self, providers, character, send_json, send_bytes, voice=None, trigger=None, director=None, narrative=None, clock=time.monotonic):
+    def __init__(self, providers, character, send_json, send_bytes, voice=None, trigger=None, director=None, narrative=None, clock=time.monotonic,
+                 archive=None, archive_entries=()):
         self.providers = providers
         self.character = character
         self.send_json = send_json
@@ -51,6 +54,9 @@ class LiveSession:
         self.trigger_active = False
         self.trigger_cleared = False
         self.trigger_evidence = ""
+        self.archive = archive if archive and archive.enabled else None
+        self.archive_entries = tuple(archive_entries) if self.archive else ()
+        self.last_archive_context = None
 
     async def story_state(self):
         if self.story.revision != self.story_seen_revision:
@@ -137,7 +143,8 @@ class LiveSession:
     async def _check_story(self,key):
         try:
             plan=await asyncio.wait_for(self.providers.direct(self.character,self.history.context_messages(budget=3000),'',
-                self.director,self.voice,self.trigger,self.trigger_active,self.last_plan,False,self.story.context()),
+                self.director,self.voice,self.trigger,self.trigger_active,self.last_plan,False,self.story.context(),
+                **({'archive':self.last_archive_context} if self.archive else {})),
                 getattr(self.providers,'director_timeout',6)+0.5)
             if (self.story.revision!=key[0] or self.reply_pending or self.input_active or self.story.paused_at is not None
                     or not self.director.enabled): return
@@ -273,13 +280,21 @@ class LiveSession:
             elif action and self.trigger:
                 transcript['display_text'] = self.trigger.condition
             await self.send_json(transcript)
+            archive_context = None
+            if self.archive:
+                matches = retrieve(self.archive_entries, text, director_context)
+                archive_context = grounding_messages(matches)
+                self.last_archive_context = archive_context
+                await self.send_json({'type':'archive_sources','turn_id':turn_id,'scope':'selected',
+                                      'selected_count':len(self.archive_entries),'matches':matches})
             plan = None
             if self.director.enabled:
                 check_started = time.perf_counter()
                 try:
                     plan = await asyncio.wait_for(self.providers.direct(
                         self.character,director_context,text,self.director,self.voice,
-                        self.trigger,self.trigger_active,self.last_plan,action,self.story.context()),
+                        self.trigger,self.trigger_active,self.last_plan,action,self.story.context(),
+                        **({'archive':archive_context} if self.archive else {})),
                         getattr(self.providers,"director_timeout",6)+0.5)
                     metrics["director_ms"] = round((time.perf_counter()-check_started)*1000)
                     if self.trigger and not action:
@@ -350,7 +365,8 @@ class LiveSession:
                 target = target.model_copy(update={"beat":target.beat + "\n\n" + plan.actor_note()})
             answer = []
             llm_started = time.perf_counter()
-            async for delta in self.providers.text(target, self.history.prompt_messages()):
+            async for delta in self.providers.text(target, self.history.prompt_messages(),
+                    **({'archive':archive_context} if self.archive else {})):
                 if not answer: metrics["llm_first_token_ms"] = round((time.perf_counter() - llm_started) * 1000)
                 answer.append(delta)
                 await self.send_json({"type":"text_delta", "turn_id":turn_id, "text":delta})
@@ -392,6 +408,8 @@ class LiveSession:
             await self.send_bytes(struct.pack("!II", turn_id, 0) + chunk)
         if take['reference'] is None and reference_audio:
             self.reference = synthetic_reference(bytes(reference_audio), reply)
+            if self.reference is None:
+                await voice_notice('Automatic voice will wait for a complete reply lasting 1–30 seconds before keeping a voice reference. This reply has not been cropped.')
         await self.send_json({"type":"phrase_done", "turn_id":turn_id, "seq":0,
             "audio_seconds":round(audio_bytes / (2 * OUTPUT_RATE), 3), "audio_chunks":audio_chunks,
             "generation_ms":round((time.perf_counter() - tts_started) * 1000)})
@@ -401,21 +419,34 @@ class LiveSession:
 
     async def turn_error(self, turn_id, exc):
         # Keep dialogue, character data and captured audio out of logs.
-        logger.warning("Live turn failed (%s); inspect the local model service logs.", type(exc).__name__)
+        voice_failure = exc if isinstance(exc, VoiceFailure) else getattr(exc, 'voice_failure', None)
+        if not isinstance(voice_failure, VoiceFailure): voice_failure = None
+        diagnostic = voice_failure.diagnostic() if voice_failure else None
+        if diagnostic:
+            logger.warning('Live voice failed: %s', json.dumps(diagnostic, sort_keys=True))
+        else:
+            logger.warning("Live turn failed (%s); inspect the local model service logs.", type(exc).__name__)
         self.reply_pending = False
         self.generation_complete = False
         take = self.retryable_voice
         can_retry = bool(take and take['turn_id'] == turn_id and not take['audio_started']
                          and self.history.current == turn_id and take['revision'] == self.story.revision)
         if not can_retry: self.retryable_voice = None
-        if isinstance(exc, VoiceServiceUnavailable): message = str(exc)
+        if isinstance(exc, VoiceServiceUnavailable): message = str(exc) + ' Details: ' + exc.safe_summary() + '.'
         elif isinstance(exc, VoiceTakeIncomplete):
-            message = "The voice take did not finish. The delivery has not been changed. Use Retry voice to keep this reply's words, emotion and voice settings."
+            message = ("The voice take did not finish: " + exc.safe_summary() +
+                       ". The delivery has not been changed. Use Retry voice to keep this reply's words, emotion and voice settings.")
+        elif voice_failure and voice_failure.reason == 'verification_unavailable':
+            message = 'The voice was generated, but the speech check could not finish. Check speech recognition before retrying; no unchecked audio was played.'
+        elif voice_failure:
+            message = "The voice request failed: " + voice_failure.safe_summary() + ". Check the Drama 3 service before retrying."
         elif can_retry:
             message = "The voice service could not generate this reply. Check the Drama 3 log; you can retry its voice without changing the dialogue."
         else:
             message = "The reply could not be generated. Check the actor and director service logs, then try again."
-        await self.send_json({"type":"error", "turn_id":turn_id, "message":message, "can_retry_voice":can_retry})
+        event = {"type":"error", "turn_id":turn_id, "message":message, "can_retry_voice":can_retry}
+        if diagnostic: event['voice_diagnostic'] = diagnostic
+        await self.send_json(event)
 
     async def retry_voice(self, turn_id):
         async with self.begin_lock:
@@ -450,6 +481,8 @@ class LiveSession:
         self.closed = True
         self.pending_beat_reply = None
         self.retryable_voice = None
+        self.archive_entries = ()
+        self.last_archive_context = None
         if self.story_director_task:
             self.story_director_task.cancel();await asyncio.gather(self.story_director_task,return_exceptions=True)
         if self.story_task:

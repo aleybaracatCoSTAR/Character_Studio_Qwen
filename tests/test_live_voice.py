@@ -194,7 +194,11 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.providers.spoken,['I am Anna, the washing machine. I would like someone to ask for help.'])
         self.assertEqual(self.providers.references,[None])
         self.assertEqual(struct.unpack("!II",self.audio[0][:8]),(1,0))
-        self.assertIsNotNone(self.session.reference)
+        # The synthetic fixture is only 100 samples, outside the serving
+        # runtime's 1–30 second reference range, so it must not seed later calls.
+        self.assertIsNone(self.session.reference)
+        self.assertTrue(any(event['type']=='voice_notice' and 'before keeping a voice reference' in event['message']
+                            for event in self.events))
 
     async def test_last_unpunctuated_sentence_is_synthesized_before_response_done(self):
         async def text(character, history):

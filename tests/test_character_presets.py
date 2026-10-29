@@ -42,7 +42,7 @@ class CharacterPresetTests(unittest.TestCase):
         self.assertTrue(self.profile.director.enabled)
         self.assertIsNone(self.profile.trigger)
         self.assertEqual(set(self.values), {'id', 'character', 'voice', 'director', 'trigger', 'narrative'})
-        self.assertEqual([value['id'] for value in presets()], ['kaden'])
+        self.assertEqual([value['id'] for value in presets()], ['kaden', 'map-keeper'])
 
     def test_loader_validates_source_file_limits_before_returning_a_profile(self):
         invalid = []
@@ -176,7 +176,7 @@ class CharacterPresetTests(unittest.TestCase):
         listed[0]['character']['about'] = 'MUTATED'
         listed.append({'id': 'MUTATED'})
         self.assertEqual(preset('kaden'), expected)
-        self.assertEqual(presets(), [expected])
+        self.assertEqual(next(value for value in presets() if value['id']=='kaden'), expected)
 
     def test_unknown_ids_are_rejected_instead_of_becoming_filesystem_paths(self):
         for name in ('missing', 'karim', '../anna', '../../etc/passwd', '/tmp/kaden',
@@ -199,11 +199,22 @@ class CharacterPresetAPITests(unittest.TestCase):
         detail = self.client.get('/api/characters/presets/kaden')
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(detail.status_code, 200)
-        self.assertEqual(listed.json(), [detail.json()])
+        self.assertEqual(next(value for value in listed.json() if value['id']=='kaden'), detail.json())
         self.assertEqual(CharacterPreset.model_validate(detail.json()).id, 'kaden')
         self.assertEqual(listed.headers['cache-control'], 'no-store')
         detail.json()['character']['name'] = 'MUTATED'
         self.assertEqual(self.client.get('/api/characters/presets/kaden').json()['character']['name'], 'KADEN')
+
+    def test_archive_character_is_a_separate_grounded_role_without_invented_contributor_memories(self):
+        response = self.client.get('/api/characters/presets/map-keeper')
+        self.assertEqual(response.status_code, 200)
+        profile = CharacterPreset.model_validate(response.json())
+        self.assertEqual(profile.character.name, 'Mika')
+        self.assertEqual(profile.character.memories, '')
+        self.assertFalse(profile.narrative.enabled)
+        self.assertIsNone(profile.trigger)
+        self.assertIn('not a contributor', profile.character.about)
+        self.assertIn('never claim to search the whole map', profile.character.rules)
 
     def test_existing_anna_example_and_story_remain_unchanged(self):
         character = self.client.get('/api/example')

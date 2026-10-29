@@ -35,7 +35,10 @@ class VoiceRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(requests[0]['input'],STYLED)
                     self.assertEqual((requests[0]['ref_audio'],requests[0]['ref_text']),REFERENCE)
                     sleep.assert_awaited_once_with(.25)
-                    self.assertEqual(notices,['The voice service is temporarily unavailable. Retrying the whole reply with the same emotion and voice.'])
+                    self.assertEqual(len(notices),1)
+                    self.assertIn('[http_status]',notices[0])
+                    self.assertIn(f'HTTP {status}',notices[0])
+                    self.assertTrue(notices[0].endswith('Retrying the whole reply with the same emotion and voice.'))
             finally: await providers.close()
 
     async def test_transient_transport_classes_recover_without_changing_input_or_reference(self):
@@ -109,7 +112,9 @@ class VoiceRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 sleep.assert_not_awaited()
             self.assertEqual(len(requests),2)
             self.assertEqual(requests[0],requests[1])
-            self.assertEqual(notices,['Voice generation did not finish. Retrying the whole reply with the same emotion and voice.'])
+            self.assertEqual(len(notices),1)
+            self.assertIn('[missing_done]',notices[0])
+            self.assertTrue(notices[0].endswith('Retrying the whole reply with the same emotion and voice.'))
         finally: await providers.close()
 
     async def test_transient_then_incomplete_take_share_the_two_attempt_limit(self):

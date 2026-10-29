@@ -111,7 +111,9 @@ class VoiceGenerationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([item['input'] for item in requests], [STYLED, STYLED])
             self.assertEqual(requests[0], requests[1])
             self.assertEqual(len(notices), 1)
-            self.assertEqual(notices[0], 'Voice generation did not finish. Retrying the whole reply with the same emotion and voice.')
+            self.assertIn('[token_limit]', notices[0])
+            self.assertIn(f"{requests[0]['max_new_tokens']}/{requests[0]['max_new_tokens']} tokens", notices[0])
+            self.assertTrue(notices[0].endswith('Retrying the whole reply with the same emotion and voice.'))
             self.assertNotIn(PLAIN, notices[0])
             for item in requests:
                 self.assertEqual((item['ref_audio'], item['ref_text']), REFERENCE)

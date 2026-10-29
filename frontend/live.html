@@ -1,13 +1,23 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Character Studio · Live voice</title><link rel="stylesheet" href="/static/styles.css"><link rel="stylesheet" href="/static/live.css"><script type="module" src="/static/live.js"></script></head>
-<body><header><a class="brand" href="/">Character Studio <span>Live voice</span></a><div id="status" role="status">Checking services…</div></header>
+<body><header><div class="brand-area"><a class="brand" href="/">Character Studio <span>Live voice</span></a><a class="archive-nav" href="/archive/" aria-label="Open character with archive">Archive</a></div><div id="status" role="status">Checking services…</div></header>
 <main><aside><div class="section-heading"><h1>Your character</h1><button id="toggle-profile" class="quiet" aria-expanded="true">Hide details</button></div><p class="hint">Set their point of view before starting the call.</p>
 <label class="character-picker">Character<select id="character-picker" disabled aria-describedby="character-library-note"><option>Loading your character…</option></select></label>
 <p id="character-library-note" class="hint small">Your current character will stay selected.</p>
 <form id="character-form">
 <label>Name<input name="name" required maxlength="80"></label><label>Who are they?<input name="role" maxlength="120"></label>
 <label>About them<textarea name="about" rows="4" maxlength="2400"></textarea></label><label>What do they want?<textarea name="goal" rows="2" maxlength="500"></textarea></label>
+<details id="archive-settings"><summary>Archive</summary>
+<label class="trigger-toggle"><input type="checkbox" id="archive-enabled"> Consult an archive</label>
+<p class="hint small">Searches the stories you add here, not the whole map. <a href="https://www.queeringthemap.com/" target="_blank" rel="noopener noreferrer">Open Queering the Map</a>.</p>
+<div class="archive-heading"><span id="archive-count" class="hint small">0 of 0 stories selected</span><button type="button" id="archive-add" class="quiet" aria-haspopup="dialog">+ Add story</button></div>
+<p id="archive-empty" class="hint small">No stories added yet. Choose an entry from Queering the Map, or paste a passage.</p>
+<ul id="archive-entries" class="archive-entries" aria-label="Selected story collection"></ul>
+<p id="archive-limit" class="hint small" hidden>The collection holds up to 50 stories. Remove one to add another.</p>
+<p id="archive-status" class="hint small" role="status" aria-live="polite"></p><button type="button" id="archive-reload" class="quiet" hidden>Try loading stories again</button>
+<p class="hint small archive-credit">Queering the Map material: <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC-SA 4.0</a>. Pasted passages remain labelled separately. End the call before changing the collection.</p>
+</details>
 <details><summary>World & memories</summary><label>Environment<textarea name="environment" rows="3" maxlength="700"></textarea></label><label>Memories<textarea name="memories" rows="3" maxlength="1200"></textarea></label><label>What must stay true?<textarea name="rules" rows="3" maxlength="1000"></textarea></label><label>Current story moment<textarea name="beat" rows="2" maxlength="500"></textarea></label></details>
 <details><summary>How they speak</summary>
 <label>Voice<select id="voice-preset"><option value="automatic">Automatic</option><option value="female">Female · British</option><option value="male">Male · British</option><option value="custom">Custom reference</option></select></label>
@@ -65,6 +75,7 @@
 <p id="story-reason" class="hint small" role="status"></p></section>
 <details id="director-latest" hidden><summary>Latest director note</summary><p id="director-note" class="hint small"></p></details>
 </div></section>
+<details id="archive-reply-sources" class="archive-reply-sources" hidden><summary id="archive-sources-summary">Sources for this reply</summary><p id="archive-sources-note" class="hint small"></p><div id="archive-sources-list"></div></details>
 <div id="messages" role="log" aria-live="polite"><div id="empty-state"><div class="spark">✳</div><h3>A conversation, one turn at a time.</h3><p>Start the call and speak. Pause to hear a reply. Use Stop reply to take over.</p></div></div>
 <div class="call-controls"><p id="call-state" role="status">Ready when you are</p><div class="call-buttons">
 <button id="start-call" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span>Start call</span></button>
@@ -74,6 +85,13 @@
 <p class="hint small center">Mic waits during replies · Replies play as they arrive · Headphones recommended</p>
 <p class="attribution">Built with Fish Audio · Speech recognition → director → character actor → Drama 3 voice</p></div>
 </section></main>
+<dialog id="archive-dialog" aria-labelledby="archive-dialog-title" aria-describedby="archive-dialog-description">
+<div class="inspection-heading"><h2 id="archive-dialog-title">Add a story</h2><button type="button" id="archive-close" class="secondary">Close</button></div>
+<p id="archive-dialog-description" class="hint">Import one selected Queering the Map entry, or paste a passage. Adding the homepage does not import the map.</p>
+<form id="archive-entry-form"><label>Entry URL or numeric ID<input id="archive-entry-id" maxlength="500" placeholder="https://www.queeringthemap.com/moment/123"></label>
+<details id="archive-paste"><summary>Or paste a story</summary><label>Title<input id="archive-paste-title" maxlength="120" placeholder="A short label for this passage"></label><label>Story text<textarea id="archive-paste-text" rows="6" maxlength="12000" placeholder="Paste the passage you want this character to consult…"></textarea></label><label>Queering the Map source link (optional)<input id="archive-paste-source" type="url" maxlength="500" placeholder="https://www.queeringthemap.com/moment/123"></label><p class="hint small">Pasted text is labelled as supplied by you. A source link does not verify that the pasted words are the original entry.</p></details>
+<p id="archive-dialog-error" class="hint" role="alert"></p><button type="submit" id="archive-submit" class="primary">Add story</button></form>
+</dialog>
 <dialog id="model-inspector" aria-labelledby="inspection-title" aria-describedby="inspection-description">
 <div class="inspection-heading"><h2 id="inspection-title">What the model sees</h2><button type="button" id="close-inspector" class="secondary" aria-label="Close model request inspector">Close</button></div>
 <p id="inspection-description" class="hint">Your selected request stays still while you read. Choose another request or Show latest to update it. Download a text copy or the recent request log. Voice audio files and connection details are omitted.</p>

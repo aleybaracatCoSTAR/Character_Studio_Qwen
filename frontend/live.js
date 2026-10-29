@@ -6,7 +6,9 @@ import {VoiceRetry} from './live-voice-retry.mjs';
 import {DirectorPanel} from './live-director-panel.mjs';
 import {CallFeedback} from './live-feedback.mjs';
 import {CharacterLibrary} from './live-characters.mjs';
+import {ArchivePanel} from './live-archive.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
+const archivePage=location.pathname.startsWith('/archive');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 let socket=null,context=null,stream=null,capture=null,playback=null,connecting=false,muted=false,ready=false,currentTurn=0;
 let replyPending=false,resumeTimer=null;
@@ -18,6 +20,7 @@ let libraryHint='Each character keeps its own settings. End the call before swit
 const conversation=new Conversation($('messages'),$('empty-state'));
 const callFeedback=new CallFeedback($('feedback'));
 const inspector=new PromptInspector({document,send});
+const archivePanel=new ArchivePanel({document,onChange:()=>saveActiveProfile()});
 const directorPanel=new DirectorPanel({button:$('toggle-director'),content:$('director-content'),
   summary:$('director-summary'),empty:$('director-empty')});
 const voiceRetry=new VoiceRetry({button:$('retry-voice'),send,
@@ -66,7 +69,7 @@ function storyControls(){
 }
 function character(){return Object.fromEntries(fields.map(key=>[key,form.elements[key].value]));}
 function capturedProfile(){return {character:character(),voice:{preset:$('voice-preset').value,...delivery()},
-  director:directorSettings(),trigger:triggerSettings(),narrative:narrativeSettings()};}
+  director:directorSettings(),trigger:triggerSettings(),narrative:narrativeSettings(),archive:archivePanel.settings()};}
 function libraryNotice(){
   $('character-library-note').textContent=libraryHint+(characterLibrary?.storageError?' Changes are kept for this page, but this browser could not save them.':'');
 }
@@ -99,6 +102,7 @@ function applyProfile(profile){
     $('trigger-fields').hidden=!profile.trigger;$('test-trigger').textContent=profile.trigger?.action||'Test reaction';
     storyEditor.load(profile.narrative.beats);$('story-enabled').checked=profile.narrative.enabled;$('story-mode').value=profile.narrative.mode;
     $('story-settings').hidden=!profile.narrative.enabled;
+    archivePanel.apply(profile.archive??{enabled:profile.id==='map-keeper',entry_ids:[]});
     clearReference();updateVoicePreset();
     $('chat-title').textContent=`Talk to ${profile.character.name.trim()||'your character'}`;
     clearTimeout(resumeTimer);replyPending=false;currentTurn=0;triggerActive=false;
@@ -116,8 +120,13 @@ async function loadCharacterLibrary(){
     const data=await response.json();if(!Array.isArray(data))throw new Error('Presets unavailable.');presets=data;
   }catch(error){libraryHint='Your saved character is available. Update and restart the studio server to add KADEN.';}
   try{profileStorage=localStorage;}catch(error){}
-  characterLibrary=new CharacterLibrary({storage:profileStorage,current:capturedProfile(),presets});
+  let savedArchive=false;
+  if(archivePage){try{savedArchive=!!profileStorage?.getItem('live-archive-character-library-v1');}catch(error){}}
+  characterLibrary=new CharacterLibrary({storage:profileStorage,current:capturedProfile(),presets,
+    ...(archivePage?{key:'live-archive-character-library-v1',legacyWrites:false}:{})});
+  if(archivePage&&!savedArchive&&characterLibrary.preset('map-keeper'))characterLibrary.switchTo('map-keeper');
   applyProfile(characterLibrary.active());
+  if(archivePage)$('archive-settings').open=true;
 }
 function feedback(message='',kind='general'){callFeedback.show(message,kind);}
 function state(message){$('call-state').textContent=message;}
@@ -154,6 +163,7 @@ function controls(){
   $('text-mode').hidden=!!connected;$('text-mode').disabled=connecting||!ready;
   $('send-text').disabled=!connected||!sessionReady;
   for(const element of form.elements)element.disabled=element.dataset.liveSetting?connecting:!!connected||connecting;
+  archivePanel.setBusy(!!connected||connecting);
   $('test-trigger').disabled=!connected||!sessionReady||!$('trigger-enabled').checked;
   $('clear-trigger').disabled=!connected||!sessionReady||!triggerActive;
   document.querySelector('.live-badge').classList.toggle('active',!!connected);storyControls();
@@ -164,6 +174,7 @@ async function disconnect(){
   const previous=socket,oldContext=context,oldStream=stream,oldCapture=capture,oldPlayback=playback;
   socket=null;context=null;stream=null;capture=null;playback=null;connecting=true;
   inspector.setConnected(false);
+  archivePanel.resetSources();
   voiceRetry.clear();
   callFeedback.clearVoiceNotice();
   clearTimeout(resumeTimer);replyPending=false;sessionReady=false;triggerActive=false;controls();
@@ -178,6 +189,7 @@ async function disconnect(){
 }
 function event(data){
   if(data.type==='model_inspection'){inspector.accept(data);return;}
+  if(data.type==='archive_sources'){archivePanel.showSources(data);return;}
   if(data.type==='story_state'){renderStory(data);return;}
   if(data.type==='story_decision'){$('story-reason').textContent=`Director held this beat: ${data.reason}`;return;}
   if(data.type==='director_ack'){feedback(data.message);return;}
@@ -197,7 +209,7 @@ function event(data){
   if(data.type==='ready'){sessionReady=true;inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
-  if(data.type==='turn_start'){callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
+  if(data.type==='turn_start'){callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
   if(data.type==='interrupted'){
     if(data.turn_id===currentTurn){voiceRetry.clear();playback.clear();resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
     return;
@@ -226,13 +238,14 @@ function event(data){
 }
 async function connect(useMic=true){
   if(connecting)return;if(socket){await disconnect();return;}if(!form.reportValidity())return;
+  if(archivePanel.pending){feedback('Wait for the archive story to finish saving or loading, then start the call.');return;}
   const outline=narrativeSettings();
   if(outline.enabled&&(!outline.beats.length||outline.beats.some(beat=>!beat.title.trim()||!beat.goal.trim()||!Number.isFinite(beat.min_seconds)||!Number.isFinite(beat.max_seconds)||beat.max_seconds<=beat.min_seconds))){
     feedback('Give every beat a title and goal, with a maximum time greater than its minimum.');return;
   }
   connecting=true;feedback();controls();
   try{
-    conversation.reset();inspector.reset();voiceRetry.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
+    conversation.reset();inspector.reset();archivePanel.resetSources();voiceRetry.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}
@@ -247,7 +260,7 @@ async function connect(useMic=true){
     opened.onerror=()=>{if(socket===opened)feedback('Cannot connect to the live server. Check its terminal and SSH tunnel.');};
     opened.onclose=async()=>{if(socket===opened){feedback('Live connection closed. Check that all three services are ready.');await disconnect();}};
     await new Promise((resolve,reject)=>{opened.onopen=resolve;opened.addEventListener('error',reject,{once:true});opened.addEventListener('close',()=>reject(new Error('Connection closed')),{once:true});});
-    send({type:'start',character:character(),voice,trigger:triggerSettings(),director:directorSettings(),narrative:narrativeSettings()});
+    send({type:'start',character:character(),voice,trigger:triggerSettings(),director:directorSettings(),narrative:narrativeSettings(),archive:archivePanel.settings()});
     if(useMic){
       const source=context.createMediaStreamSource(stream),gain=context.createGain();gain.gain.value=0;
       capture=new AudioWorkletNode(context,'live-capture');const resampler=new StreamResampler(context.sampleRate);
@@ -330,6 +343,11 @@ async function status(){
   }catch(error){ready=false;$('status').textContent='Server disconnected';controls();}
 }
 async function init(){
+  if(archivePage){
+    document.title='Character Studio · Character + archive';
+    document.querySelector('.brand span').textContent='Character + archive';
+    document.querySelector('.eyebrow').textContent='ARCHIVE CONVERSATION';
+  }
   let saved;try{saved=JSON.parse(localStorage.getItem('live-character-v1')||localStorage.getItem('qwen-character-v1'));}catch(error){}
   const initial=saved?.name?saved:await(await fetch('/api/example')).json();
   for(const key of fields)form.elements[key].value=initial[key]||(key==='speaker'?'Chelsie':'');
@@ -362,6 +380,7 @@ async function init(){
   storyEditor.load(Array.isArray(script.beats)?script.beats:[]);$('story-enabled').checked=!!script.enabled;
   if(['manual','timed','director'].includes(script.mode))$('story-mode').value=script.mode;
   $('story-settings').hidden=!$('story-enabled').checked;previewStory();
+  await archivePanel.load();
   await loadCharacterLibrary();
   await status();setInterval(status,5000);
 }

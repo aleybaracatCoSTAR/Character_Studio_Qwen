@@ -12,7 +12,7 @@ export function characterProfile(value,id=value?.id){
       ||!value.character||typeof value.character.name!=='string')return null;
   const voice=value.voice??{},director=value.director??{},narrative=value.narrative??{};
   const preset=['automatic','female','male','custom'].includes(voice.preset)?voice.preset:'automatic';
-  return {id,character:strings(value.character,CHARACTER_FIELDS),
+  const profile = {id,character:strings(value.character,CHARACTER_FIELDS),
     voice:{preset,emotion:typeof voice.emotion==='string'?voice.emotion:'neutral',
       event:typeof voice.event==='string'?voice.event:'none',direction:typeof voice.direction==='string'?voice.direction:''},
     director:{enabled:typeof director.enabled==='boolean'?director.enabled:true,notes:typeof director.notes==='string'?director.notes:''},
@@ -21,13 +21,17 @@ export function characterProfile(value,id=value?.id){
       beats:Array.isArray(narrative.beats)?narrative.beats.slice(0,12).map(beat=>Object.fromEntries(BEAT_FIELDS.map(key=>
         [key,['min_seconds','max_seconds'].includes(key)?(Number.isFinite(beat?.[key])?beat[key]:key==='min_seconds'?15:90)
           :typeof beat?.[key]==='string'?beat[key]:'']))):[]}};
+  if(value.archive&&typeof value.archive==='object')profile.archive={enabled:value.archive.enabled===true,
+    entry_ids:[...new Set(Array.isArray(value.archive.entry_ids)?value.archive.entry_ids.filter(id=>typeof id==='string'&&/^[a-f0-9]{32}$/.test(id)):[])].slice(0,50)};
+  return profile;
 }
 
 export class CharacterLibrary {
-  constructor({storage,current,presets=[]}){
+  constructor({storage,current,presets=[],key=CHARACTER_LIBRARY_KEY,legacyWrites=true}){
     this.storage=storage;this.storageError=false;this.profiles=new Map();this.presets=new Map();this.activeId=null;
+    this.key=key;this.legacyWrites=legacyWrites;
     let saved;
-    try{saved=JSON.parse(storage?.getItem(CHARACTER_LIBRARY_KEY)??'null');}catch(error){this.storageError=true;}
+    try{saved=JSON.parse(storage?.getItem(this.key)??'null');}catch(error){this.storageError=true;}
     if(saved?.version===1&&Array.isArray(saved.profiles))for(const value of saved.profiles){
       const profile=characterProfile(value);if(profile&&!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
     }
@@ -42,7 +46,7 @@ export class CharacterLibrary {
   persist(){
     if(!this.storage){this.storageError=true;return false;}
     try{
-      this.storage.setItem(CHARACTER_LIBRARY_KEY,JSON.stringify({version:1,activeId:this.activeId,profiles:[...this.profiles.values()]}));
+      this.storage.setItem(this.key,JSON.stringify({version:1,activeId:this.activeId,profiles:[...this.profiles.values()]}));
       this.storageError=false;return true;
     }catch(error){this.storageError=true;return false;}
   }
@@ -63,7 +67,7 @@ export class CharacterLibrary {
   writeLegacy(){
     // Never replace the sole surviving legacy copy with a different character
     // until the complete library, including the prior character, was saved.
-    if(this.storageError||!this.storage)return false;
+    if(!this.legacyWrites||this.storageError||!this.storage)return false;
     const profile=this.active();
     try{
       this.storage.setItem('live-character-v1',JSON.stringify(profile.character));
