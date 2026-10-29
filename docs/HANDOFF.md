@@ -1,4 +1,12 @@
-# Latest change: verified capped-take recovery, 29 October 2026
+# Latest change: persistent Slurm batch entrypoint, 29 October 2026
+
+`scripts/run_live_slurm.sbatch` submits the existing three-GPU stack as one foreground service launch owned by a batch allocation, independent of the SSH terminal used for submission. Defaults are `proto`, one node/task, three H200s, 24 CPUs, 256 GiB host RAM and four hours. It validates the Slurm job/submission-directory context and repository path, enables unbuffered output, logs the job/node, Git revision when available and the voice-verification flag, then replaces itself with one `srun` of `quality-3gpu`. It does not install/download models, launch an overlapping copy, automatically submit/retry a job or cancel other allocations. `slurm-character-JOB_ID.log` is ignored by Git. The user submits explicitly from `login01`; no cluster job was submitted by this implementation.
+
+This follows an interactive allocation ending early with SIGKILL while two steps existed. Scheduler output showed cancellation but did not establish OOM or its origin. Separate per-step RSS peaks must not be summed as a simultaneous total. Local review found isolated shutdown groups and bounded audio checks, not a demonstrated runaway memory path. Batch mode removes dependence on an allocating terminal's lifetime; it does not establish or repair an unknown scheduler/memory cause. Browser use still needs the Mac tunnel to the actual assigned node. See [MULTI_GPU.md](MULTI_GPU.md#background-job).
+
+406 Python tests pass, including eight batch-entrypoint tests using a fake `srun` and stub stack: syntax, literal resource directives, missing-context refusal, paths with spaces, exact single-launch arguments, unbuffered output, missing-stack refusal and child-exit propagation. Existing JavaScript is unchanged with 113 tests passing in the preceding update. No GPU or scheduler integration test was performed.
+
+# Previous change: verified capped-take recovery, 29 October 2026
 
 Live reports of `488/488`, `460/460` and `432/432` tokens with about 20–23 seconds of audio identify codec-frame limit stops, but do not establish whether the waveform contains ongoing speech or a long silent tail. The client no longer treats every valid limited stream as an automatic failure or increases every request's allowance.
 

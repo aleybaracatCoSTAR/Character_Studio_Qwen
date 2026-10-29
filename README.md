@@ -24,6 +24,8 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 
 ![Character sheet and conversation preview](docs/screenshots/studio-preview.jpg)
 
+**Surrey background launch:** after installation, submit `sbatch scripts/run_live_slurm.sbatch` from the repository on `login01` to run the three-GPU stack without keeping an allocation terminal open. It requests one four-hour job; the actual browser tunnel must still target its allocated node. [Batch setup and logs](docs/MULTI_GPU.md#background-job).
+
 ## What it does
 
 - Editable identity, goal, environment, memories, boundaries, story moment and voice description.
@@ -91,7 +93,7 @@ node --test tests/*.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-398 Python tests and 113 JavaScript tests exercise strict token-limit recovery and tail analysis, selected-story retrieval and provenance, spoken coverage and safe voice diagnostics, authored character presets and profile preservation, model-input exports and stable reading, app contracts, beat-entry replies, voice recovery, actual model-input inspection, protected turn-taking, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
+406 Python tests and 113 JavaScript tests exercise the background batch entrypoint, strict token-limit recovery and tail analysis, selected-story retrieval and provenance, spoken coverage and safe voice diagnostics, authored character presets and profile preservation, model-input exports and stable reading, app contracts, beat-entry replies, voice recovery, actual model-input inspection, protected turn-taking, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

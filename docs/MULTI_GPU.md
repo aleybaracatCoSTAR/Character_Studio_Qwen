@@ -12,7 +12,29 @@ The live app can run its narrative director and character actor on larger models
 
 Official model cards: [Qwen3-30B-A3B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507) (non-thinking MoE), [Qwen3-32B](https://huggingface.co/Qwen/Qwen3-32B). The director uses the latter in non-thinking mode for bounded structured responses. Both are BF16 in these profiles. The actor and director each fit their own H200 allocation target; these scripts do not use tensor parallelism. vLLM describes [when to use tensor/pipeline parallelism](https://docs.vllm.ai/en/latest/serving/parallelism_scaling/). Do not infer that distributing the same model across more devices will improve its answers.
 
-## 1. Request the allocation on the Surrey login node
+## Background job
+
+For a server you want to keep running after closing your allocation terminal, submit the included batch file from `login01`. It requests one node in `proto`, three H200s, 24 CPUs and 256 GiB of host memory for four hours. It starts the existing `quality-3gpu` stack once in the foreground of that batch allocation; no additional model installation or download is performed.
+
+```bash
+cd "/scratch4weeks/$USER/Character_Studio_Qwen"
+GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull --ff-only
+sbatch scripts/run_live_slurm.sbatch
+```
+
+`sbatch` prints the new job ID and returns to the login prompt. The job can remain pending until resources are available. Once it starts, its combined app/startup output is in `slurm-character-JOB_ID.log` in this repository directory; replace `JOB_ID` with the returned number. Service details remain under `live-voice-store/logs/`. These local job logs are ignored by Git.
+
+```bash
+squeue -u "$USER" -o "%.18i %.20j %.2t %.10L %R"
+```
+
+Use the actual allocated node in your Mac tunnel; do not assume it is still `costar07`. The server allocation is independent of the terminal used to submit it, but the Mac SSH forwarding connection must stay open while using the browser. Closing the tunnel disconnects the browser; it does not itself stop the batch server. Batch mode does not preserve an active call's RAM-only dialogue across a client disconnect, and does not prevent scheduler cancellation, memory limits or the four-hour time limit. [Slurm batch-job behavior](https://slurm.schedmd.com/sbatch.html).
+
+Do not start another stack from an overlapping shell while the batch job is already serving. Pull updates from the login node, stop your actual batch job with `scancel JOB_ID`, wait until it has ended, then submit the batch file again. There is no automatic job submission, retry, cancellation of other jobs or increase in the requested RAM.
+
+The wrapper requires Slurm's job/submission-directory variables and a repository containing the live launcher. Running it with plain `bash` on the login node is rejected. It delegates to `srun` inside the batch allocation so Slurm still owns the GPU processes. Local tests use a fake `srun` and fake model launcher; no batch job was submitted during implementation.
+
+## 1. Request an interactive allocation on the Surrey login node
 
 Stop an earlier stack and release its old allocation when finished with it. Do not launch large models on `login01`.
 
@@ -78,5 +100,13 @@ Compare the same participant messages and reference voice across the one- and th
 The dedicated actor and director each budget 85% of their own GPU; Drama 3 budgets 70% for its main stage and 10% for its codec on its own GPU. These are configuration budgets, **not measured VRAM requirements**. Context is capped at 16,384 tokens for quality text servers. The small profile retains its existing 8,192-token cap and combined GPU budget. Recognition remains on CPU.
 
 The launcher keeps each server in its own process group, waits for health and stops only its tracked groups on Ctrl+C. Existing ports are never taken over. Wait for cleanup before relaunching. It does not cancel the Slurm allocation; use `squeue -u "$USER"` and cancel your actual job ID when finished. The independent director can also be routed to an already running endpoint as documented in [DIRECTOR.md](DIRECTOR.md), but a quality profile's local director is managed by its launcher.
+
+If a job is killed, inspect its accounting record before assigning a cause:
+
+```bash
+sacct -j JOB_ID --format=JobID,User,State%30,Reason%45,ExitCode,Elapsed,Timelimit,ReqMem,MaxRSS
+```
+
+`SIGKILL`/`0:9` alone does not establish out-of-memory. A per-step `MaxRSS` is that step's peak, not a timestamped simultaneous total across steps; do not add separate peaks as proof that the job exceeded its allocation. A finished job can disappear from `squeue` while remaining in `sacct`. If the original interactive allocation is cancelled, work started through another overlapping step can be terminated with it. Match cancellation UID with `id -u` and use the scheduler's `Reason` or Surrey support when the cause remains unclear. [Slurm accounting fields](https://slurm.schedmd.com/sacct.html).
 
 **Validation:** model identities and pinned revisions were checked against their official Hugging Face repositories. CPU tests validate allocation mapping, distinct roles, bounded budgets and launch arguments. No new H200 allocation was submitted and these quality profiles have not yet been GPU-smoke-tested. Preserve the working dependency pins if a first load fails, and inspect the relevant log before changing packages.
