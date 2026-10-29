@@ -2,6 +2,8 @@
 
 Updated 29 October 2026. The current policy is one continuous voice take per complete reply, with one fixed emotion and reference. The earlier sentence-level natural-delivery retry was reported to create unwanted mood changes and has been removed. [Voice failure diagnosis](VOICE_FAILURES.md) describes the added recognition check, strict limited-take recovery and bounded adaptive retry. The real-model comparisons below describe the earlier cue-format tests, not a new validation of these recovery rules.
 
+The later [sampling correction](DRAMA3_SAMPLING.md) changes the live runtime's main/acoustic top-k separation, following a failure mode documented by SGLang-Omni. Historical listening results below used the previous sampler; they do not validate the new policy.
+
 ## What failed
 
 The app inserted two separate cues after the first two spoken words: an emotion label and a longer direction. On the reported line, that produced `It’s hard, [sad] [subdued, fragile voice with hesitant pauses] you know?...`. In direct tests, the same pattern generated only “I called” or “I love” for longer sentences and continued to the generation-token limit. Increasing that limit alone cannot restore the missing words.

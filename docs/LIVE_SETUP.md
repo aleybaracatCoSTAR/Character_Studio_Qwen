@@ -23,6 +23,8 @@ GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull
 
 The launcher reuses the working Drama 3 `.venv-drama3` GPU environment and model download. The live app and CPU speech recognition use `.venv-live`, keeping their dependencies separate. For a fresh installation, first complete [Drama 3 setup and its voice test](../experiments/drama3/README.md). That setup pins vLLM 0.32.0 and the Omni revision, with **CUDA 13.0 Torch/Audio/Vision wheels**. Your driver may report CUDA 13.2; that does not require CUDA 13.2 Python wheels.
 
+**29 October sampling correction:** a normal live TTS start now applies one byte-verified acoustic-head correction in the pinned environment and gives main-token sampling its full candidate capacity. It retains an original backup and refuses unknown source. No dependencies or checkpoints are reinstalled. Stop the old job, pull and restart before testing; [details, rollback and current batch commands](DRAMA3_SAMPLING.md).
+
 ## 2. Download the additional listening and text models
 
 The `--prepare` launch command below installs the live app environment, then fetches a roughly 8 GB small text checkpoint and a small English Faster-Whisper checkpoint into `/scratch4weeks/$USER/live-voice-store`. The download resumes existing files. This mode uses Qwen3-4B for dialogue; the original Qwen-Omni 30B checkpoint remains a separate experiment.

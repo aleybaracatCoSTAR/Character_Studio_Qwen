@@ -20,6 +20,8 @@ A small rehearsal space for creating a character and talking to it using **Qwen3
 
 **Token-limit recovery:** a take that reaches its frame allowance is no longer rejected solely for that reason. The complete transport must validate, then the recognizer must match every normalized requested word with no extras, and a strict quiet ending must be present. Only the verified quiet suffix is trimmed, preserving a 400 ms pad. Ongoing speech with a clean recognized prefix can give the one retry a larger budget; silent stalls cannot. Words, voice and emotion stay fixed. [Recovery conditions](docs/VOICE_FAILURES.md#reaching-the-limit-does-not-reveal-what-was-spoken).
 
+**Drama 3 sampling correction:** the SGLang-Omni cookbook identifies a main-token cap that can stop speech after its first phrase. The live launcher now applies a guarded correction to separate main and acoustic sampling in the existing pinned vLLM environment, with explicit request settings visible in the model-input viewer. The voice/emotion and validation rules stay fixed. It needs a restart and real-model listening test; [evidence, update commands and rollback](docs/DRAMA3_SAMPLING.md).
+
 **Status: starter prototype.** CPU transport tests and browser checks pass. A short standalone Drama 3 synthesis succeeded on Surrey through the Mac SSH tunnel on 23 October 2026; [details](experiments/drama3/README.md#validation). The full live stack, combined H200 memory use, spoken quality and live response time still need validation. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
 
 ![Character sheet and conversation preview](docs/screenshots/studio-preview.jpg)
@@ -93,7 +95,7 @@ node --test tests/*.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-406 Python tests and 113 JavaScript tests exercise the background batch entrypoint, strict token-limit recovery and tail analysis, selected-story retrieval and provenance, spoken coverage and safe voice diagnostics, authored character presets and profile preservation, model-input exports and stable reading, app contracts, beat-entry replies, voice recovery, actual model-input inspection, protected turn-taking, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. These do not demonstrate model quality or real GPU speed.
+430 Python tests exercise the guarded sampling repair and request contracts, background batch entrypoint, strict token-limit recovery and tail analysis, selected-story retrieval and provenance, spoken coverage and safe voice diagnostics, authored character presets and profile preservation, model-input exports and stable reading, app contracts, beat-entry replies, voice recovery, actual model-input inspection, protected turn-taking, active-call memory, whole-reply delivery, cancellation, playback acknowledgements, emotional triggers and owned worker shutdown. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. Unchanged JavaScript has 113 passing tests from the preceding update. These do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

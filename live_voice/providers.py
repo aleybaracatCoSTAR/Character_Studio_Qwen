@@ -20,6 +20,7 @@ from studio.characters import system_prompt
 from .reactions import TriggerDecision, assessment_messages
 from .director import DirectorPlan, director_messages
 from .inspection import record_request
+from .drama_sampling import REQUEST_SAMPLING
 from .voice_coverage import resample_for_recognition, compare_speech, spoken_text, normalized_prefix
 from .voice_tail import analyze_tail, trim_tail
 
@@ -315,7 +316,7 @@ class LocalProviders:
             raise ValueError('Use a bounded voice generation budget.')
         payload = {"model":"fishaudio/drama-3", "input":text, "voice":"default", "stream":True,
                    "stream_format":"sse", "response_format":"pcm",
-                   "max_new_tokens":budget}
+                   "max_new_tokens":budget, "extra_params":dict(REQUEST_SAMPLING)}
         if reference:
             payload["ref_audio"], payload["ref_text"] = reference
         await record_request('tts', payload)

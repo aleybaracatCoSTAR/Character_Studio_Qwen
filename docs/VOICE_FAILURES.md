@@ -1,5 +1,7 @@
 # Diagnosing an unfinished Drama 3 voice take
 
+**29 October sampling update:** the reported `600/600 tokens, 3/21 words matched` failure is consistent with a main-token top-k limitation explicitly documented in the SGLang-Omni cookbook. The live launcher now separates uncapped main-token sampling from top-30 acoustic heads in the existing pinned vLLM runtime. See the [source evidence, guarded correction and restart procedure](DRAMA3_SAMPLING.md). This targets generation itself; it does not weaken the completion checks or establish a successful real-model result.
+
 `VoiceTakeIncomplete` means the app could not validate a complete spoken response. It does not identify the cause by itself, and it does not mean speech recognition or the character's text generation failed. The app buffers a whole reply while validating it, so a rejected take is not played as cut-off audio.
 
 ## Find the reason
@@ -56,4 +58,4 @@ Voice checking is enabled by default in the live app. `LIVE_VOICE_VERIFY_TIMEOUT
 
 Automatic voice anchoring accepts only a whole take lasting 1–30 seconds, matching the pinned upstream reference-duration rule. Shorter or longer audio is not cropped with a now-incorrect transcript and is not promoted as the next request's reference. The app waits for a suitable later take; built-in Female/Male and validated uploaded references retain their selected conditioning.
 
-No live GPU synthesis was performed for this update. The current user's repeated failures still need the service log and the new reason code to identify their cause; the corrected duration bound is not evidence that every failure came from that bound.
+No live GPU synthesis was performed for these updates. The later sampling diagnosis identifies a concrete runtime setting consistent with the reported first-phrase stall, but it still needs a real-model listening check. The corrected duration bound is not evidence that every failure came from that bound.
