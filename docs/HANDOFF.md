@@ -1,4 +1,12 @@
-# Latest change: archive import failure diagnostics, 2 November 2026
+# Latest change: preserve literal text in the official QTM export, 2 November 2026
+
+The new Surrey diagnostic identified `invalid_import_row` at row 55,666. The matching cached source record contains only the broken-heart emoticon `</3`. CPython 3.12.15's HTMLParser treats this incomplete closing-tag-like fragment as a discarded bogus comment, whereas local Python 3.11 retains it. The importer was unnecessarily routing the official numeric-ID-to-text map through HTML conversion. Official submission/export code confirms these values are literal textarea strings.
+
+The numeric-map branch now emits `text` rather than `description`. Existing ArchiveEntry trimming/length/source validation, transaction rollback, provenance and deduplication remain intact. No records are skipped or replaced. Generic record-array/JSONL/CSV `description` fields still use the previous HTML conversion. UI textContent renders source as text; fixed untrusted-source grounding keeps that data separate from authored model instructions, without claiming perfect model adherence.
+
+**495 Python tests pass.** Updated and additional tests cover literal hearts/broken hearts, incomplete angle text, literal tags/entity strings, no HTML-parser call for the official format, API preservation, repeat deduplication and invalid-later-row rollback. A fresh local database imported all **123,209** cached stories with zero rejects/duplicates; a second import added zero and identified all 123,209 as duplicates. Search still found the 154 London matches. JavaScript is unchanged from 124 passing tests. No GPU, model install, network refetch, existing database reset or source-text logging was used. Pull and retry the existing cached-file command on Surrey; actual Surrey success remains to be confirmed.
+
+# Previous change: archive import failure diagnostics, 2 November 2026
 
 The user pulled `affd4a2` on Surrey, but the bulk import returned the old generic error. Subsequent checks confirm the expected scratch archive path, SQLite 3.53.1 with working in-memory FTS5, a 21,696,338-byte downloaded snapshot, and a database that opens with one existing story. Those results narrow the outstanding failure to importing records or closing the database; they do not establish a bad source, storage failure or missing dependency.
 

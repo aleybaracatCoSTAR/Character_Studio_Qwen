@@ -353,7 +353,10 @@ class ArchiveDatabase:
                 yield from enumerate(value['entries'], 1)
             elif isinstance(value, dict) and all(_SOURCE_ID.fullmatch(key) and isinstance(text, str) for key, text in value.items()):
                 for index, (source_id, text) in enumerate(value.items(), 1):
-                    yield index, {'source_entry_id': source_id, 'description': text}
+                    # The official ID->text export contains contributors' plain
+                    # textarea input, not HTML. Preserve angle-bracket emoticons
+                    # and literal tags; HTMLParser's EOF rules vary by Python.
+                    yield index, {'source_entry_id': source_id, 'text': text}
             else:
                 raise ValueError('Archive import row 1 has an unsupported JSON structure.')
         elif format == 'jsonl':

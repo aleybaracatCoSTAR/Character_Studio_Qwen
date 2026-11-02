@@ -11,6 +11,8 @@ Under **Archive**, enable **Consult an archive** and choose the search scope:
 
 **Find stories** searches the saved collection, with counts and pages of 25 results. **Add story** still fetches one explicitly chosen moment ID or accepts pasted text. **Import collection** accepts JSON, JSONL and CSV files up to 128 MiB, validates them and commits them atomically. Duplicate text from the same source is deduplicated. Imported, pasted and individually fetched sources retain distinct provenance.
 
+The official numeric-ID export is plain text, including symbols such as `</3`. Those values use the literal text path rather than an HTML parser; explicit generic `description` fields retain HTML conversion. Source content is displayed as text and remains untrusted reference data for the models.
+
 For the larger first-party collection, follow [the database guide](QTM_DATABASE.md). It includes a no-GPU command to download the official public text snapshot and index it on Surrey. The snapshot imported locally on 2 November 2026 contains 123,209 stories; it is a dated deployment export, not a claim to contain every live story.
 
 ## Storage and migration

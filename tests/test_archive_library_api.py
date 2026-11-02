@@ -55,14 +55,24 @@ class LibraryAPITests(unittest.TestCase):
         self.assertNotIn(selected['id'],[entry['id'] for entry in result.json()['entries']])
 
     def test_search_returns_relevant_sources_and_counts_but_no_script_execution(self):
-        self.upload({'1':'<p>Fictional telescope discovery — القاهرة.</p><script>PRIVATE_SCRIPT()</script>',
-                     '2':'A fictional garden memory.'})
+        self.upload([{'source_entry_id':'1','description':'<p>Fictional telescope discovery — القاهرة.</p><script>PRIVATE_SCRIPT()</script>'},
+                     {'source_entry_id':'2','text':'A fictional garden memory.'}])
         result = self.client.get('/api/archive/entries',params={'q':'telescope'}).json()
         self.assertEqual((result['total'],result['matched']),(2,1))
         self.assertEqual(result['entries'][0]['source_url'],'https://www.queeringthemap.com/moment/1')
         self.assertNotIn('PRIVATE_SCRIPT',json.dumps(result))
         self.assertIn('القاهرة',result['entries'][0]['text'])
         self.assertEqual(self.client.get('/api/archive/entries?q=nonexistent').json()['entries'],[])
+
+    def test_official_plain_text_map_preserves_literal_symbols_and_markup_without_skipping_records(self):
+        values={'1':'</3','2':'<3','3':'<p>Literal words, not an HTML field.</p>','4':'A following fictional story.'}
+        result=self.upload(values)
+        self.assertEqual(result.status_code,200)
+        self.assertEqual((result.json()['added'],result.json()['total']),(4,4))
+        actual={entry['source_entry_id']:entry['text'] for entry in result.json()['entries']}
+        self.assertEqual(actual,values)
+        repeated=self.upload(values).json()
+        self.assertEqual((repeated['added'],repeated['duplicates'],repeated['total']),(0,4,4))
 
     def test_duplicate_import_is_idempotent_and_invalid_import_rolls_back_all_rows(self):
         initial = self.upload({'1':'A fictional garden memory.'}).json()

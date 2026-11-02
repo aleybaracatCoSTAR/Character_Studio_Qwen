@@ -230,7 +230,7 @@ class QTMImportCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             samples = {
-                'json': '{"123":"<p>Synthetic café passage.</p>"}',
+                'json': '{"123":"Synthetic café passage."}',
                 'jsonl': '{"short_id":"123","description":"<p>Synthetic café passage.</p>"}\n',
                 'csv': 'short_id,description\n123,<p>Synthetic café passage.</p>\n',
             }

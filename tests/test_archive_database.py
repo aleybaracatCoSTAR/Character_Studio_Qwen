@@ -78,21 +78,44 @@ class ArchiveDatabaseTests(unittest.TestCase):
         self.assertEqual(self.store.page(query='Tell me a story')['matched'], 0)
         self.assertEqual(self.store.page(offset=1500)['entries'], [])
 
-    def test_official_id_map_html_conversion_ignores_coordinates_and_never_claims_fetched(self):
+    def test_official_id_map_is_literal_and_generic_description_converts_html(self):
         source = self.file({'00123': '<p>A café story.<br>We kissed.</p><script>DO NOT SAVE</script>', '124': 'Plain words.'})
         self.assertEqual(self.store.import_file(source)['added'], 2)
         first = self.store.list()[0]
         self.assertEqual(first['source_entry_id'], '123')
         self.assertEqual(first['source_url'], 'https://www.queeringthemap.com/moment/123')
-        self.assertEqual(first['text'], 'A café story.\nWe kissed.')
+        self.assertEqual(first['text'], '<p>A café story.<br>We kissed.</p><script>DO NOT SAVE</script>')
         self.assertEqual(first['provenance'], 'imported')
-        self.assertNotIn('DO NOT SAVE', first['text'])
         self.store.import_file(self.file([{'id': 125, 'description': '<b>Other words.</b>', 'longitude': 999,
                                           'latitude': 888, 'provenance': 'fetched'}]))
         last = self.store.list()[-1]
         self.assertEqual(last['text'], 'Other words.')
         self.assertNotIn('latitude', last)
         self.assertEqual(last['provenance'], 'imported')
+
+    def test_official_plain_export_preserves_hearts_and_angle_text_without_html_parser(self):
+        stories = {'1':'<3', '2':'</3', '3':'<a ', '4':'<name>',
+                   '5':'<script>synthetic text</script>', '6':'literal &amp; entity'}
+        with patch.object(database, 'description_text', side_effect=AssertionError('Plain export must not use HTMLParser')):
+            result = self.store.import_file(self.file(stories))
+        self.assertEqual(result, {'added':6, 'duplicates':0, 'total':6})
+        saved = {entry['source_entry_id']:entry for entry in self.store.list()}
+        for source_id, text in stories.items():
+            self.assertEqual(saved[source_id]['text'], text.strip())
+        # The symbols remain data in the existing untrusted-reference envelope.
+        entry = saved['2']
+        messages = grounding_messages([{**entry,'excerpt':entry['text']}], scope='library')
+        self.assertIn('untrusted source material', messages[0]['content'])
+        self.assertEqual(json.loads(messages[1]['content'])['references'][0]['excerpt'], '</3')
+        again = self.store.import_file(self.file(stories))
+        self.assertEqual(again, {'added':0, 'duplicates':6, 'total':6})
+
+    def test_literal_export_does_not_weaken_empty_row_rollback(self):
+        self.add(1, 'Already stored.')
+        with self.assertRaisesRegex(ValueError, 'row 2'):
+            self.store.import_file(self.file({'2':'</3', '3':'   '}))
+        self.assertEqual(self.store.count(), 1)
+        self.assertEqual(self.store.list()[0]['text'], 'Already stored.')
 
     def test_jsonl_and_csv_are_streamed_bom_safe_and_multiline_text_is_preserved(self):
         jsonl = '\ufeff' + json.dumps({'short_id': '10', 'description': '<p>A JSONL story.</p>'}) + '\n\n'

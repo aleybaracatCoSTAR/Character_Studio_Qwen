@@ -53,7 +53,7 @@ The current search is lexical full-text search with limited normalization, not s
 
 The database supports up to 500,000 saved stories and preserves the original IDs when migrating the previous `selected-stories.json` collection. Persistent SQLite uses rollback journalling instead of WAL because the cluster directory can be shared between hosts. Each call receives a private, read-only in-memory database snapshot through SQLite's backup API; it is closed when the call ends. This adds one snapshot-copy cost at call start and memory proportional to the indexed collection, rather than reparsing every story on every turn. Actual shared-filesystem locking still depends on the cluster; the Surrey deployment has not been tested for this update.
 
-Local checks on the imported 123,209-story snapshot produced a 99,282,944-byte database, a 38.7 ms snapshot copy, and four searches taking 0.31–30.47 ms on the development Mac. These are local database measurements, not model latency or an H200 benchmark. No speech models were invoked.
+Local checks imported the complete 123,209-story snapshot and verified search and repeat-import deduplication. These are local database checks, not model latency or an H200 benchmark. No speech models were invoked.
 
 ## Import an existing file instead
 
@@ -73,6 +73,8 @@ Supported JSON forms include the official numeric-ID-to-text object, an array of
 
 The numeric ID produces the canonical link `https://www.queeringthemap.com/moment/123`. Supplied source URLs must point to Queering the Map. Imported file metadata is not proof that an individual story was fetched or checked live.
 
+The official numeric-ID map and explicit `text` fields contain literal contributor text: emoticons, angle brackets and entity-like strings are preserved, apart from existing outer-whitespace trimming. They are never interpreted as HTML. Explicit `description` fields in generic record-array/JSONL/CSV imports retain the existing HTML-to-plain-text conversion. The browser renders archive text as text, and model prompts treat it as untrusted source material.
+
 The download and import size limit is 128 MiB. Invalid files produce a safe error instead of printing contributor text. The database import validates the complete file before committing records.
 
 ## If an import fails
@@ -88,7 +90,9 @@ The importer reports the chosen archive directory and separates preparing the so
 | Invalid legacy archive/schema | Preserve `selected-stories.json` and the database; inspect the old format instead of deleting or resetting it. |
 | Invalid import row | Use the reported row number to check the source record locally; do not paste a contributor's story into diagnostic logs. |
 
-The early generic message “The story file could not be imported” did not establish any of these causes. For the first reported Surrey failure, the user's checks confirmed SQLite 3.53.1, working in-memory FTS5, a 21,696,338-byte cached snapshot at the expected directory, and a database that opens successfully with one saved story. The remaining failure is importing records or closing the database afterward; its safe diagnostic line is needed to identify the cause. Do not change the Torch/CUDA environment or re-download models to diagnose this archive issue.
+The reported Surrey failure at **row 55,666** was a format-handling bug: the story was the broken-heart emoticon `</3`, and the importer incorrectly treated the official plain-text export as HTML. [CPython 3.12's parser](https://github.com/python/cpython/blob/v3.12.15/Lib/html/parser.py#L279) discards that incomplete closing-tag-like fragment; local Python 3.11 retained it, which explains why the first local corpus test passed. The numeric-ID map now uses the literal `text` path, so the record remains valid. No rows are skipped, limits relaxed or model packages changed. A fresh local import and repeat import both cover all 123,209 stories.
+
+Pull the correction and repeat the same cached-file import command. Existing failed imports rolled back, and the previous saved collection and downloaded file are retained. Do not change the Torch/CUDA environment or re-download models for this archive fix.
 
 ## Source and reuse
 
@@ -104,4 +108,4 @@ The public text snapshot retrieved during development on **2 November 2026** con
 
 Queering the Map content is offered under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Credit **Queering the Map**, link the license and source, identify changes, use it noncommercially, and distribute adaptations under the same license. The [official FAQ](https://github.com/radical-data/queering-the-map/blob/5233a2202d9679fd2a22ca0a904fe84b93b03e06/src/lib/content/faqs.yaml) and [Terms of Use](https://github.com/radical-data/queering-the-map/blob/5233a2202d9679fd2a22ca0a904fe84b93b03e06/src/lib/content/info/terms.md) describe these conditions. The [moderation page](https://github.com/radical-data/queering-the-map/blob/5233a2202d9679fd2a22ca0a904fe84b93b03e06/src/lib/content/info/moderation.md) explains anonymity and contributor removal requests.
 
-Suggested collection credit: “Stories from Queering the Map, CC BY-NC-SA 4.0. Retrieved on the date recorded in the snapshot metadata. HTML formatting may be converted to plain text for retrieval.”
+Suggested collection credit: “Stories from Queering the Map, CC BY-NC-SA 4.0. Retrieved on the date recorded in the snapshot metadata. Official export text is preserved; explicit HTML-description imports may be converted to plain text.”
