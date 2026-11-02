@@ -102,7 +102,7 @@ function applyProfile(profile){
     $('trigger-fields').hidden=!profile.trigger;$('test-trigger').textContent=profile.trigger?.action||'Test reaction';
     storyEditor.load(profile.narrative.beats);$('story-enabled').checked=profile.narrative.enabled;$('story-mode').value=profile.narrative.mode;
     $('story-settings').hidden=!profile.narrative.enabled;
-    archivePanel.apply(profile.archive??{enabled:profile.id==='map-keeper',entry_ids:[]});
+    archivePanel.apply(profile.archive??{enabled:profile.id==='map-keeper',scope:profile.id==='map-keeper'?'library':'selected',entry_ids:[]});
     clearReference();updateVoicePreset();
     $('chat-title').textContent=`Talk to ${profile.character.name.trim()||'your character'}`;
     clearTimeout(resumeTimer);replyPending=false;currentTurn=0;triggerActive=false;

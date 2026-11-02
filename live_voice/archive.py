@@ -1,4 +1,4 @@
-"""Small, user-selected reference collections; no fetching or corpus-wide claims."""
+"""Archive records and bounded excerpts supplied to the character."""
 from collections import Counter
 import json
 import math
@@ -80,7 +80,7 @@ class ArchiveEntry(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_ENTRY_TEXT)
     source_url: str = Field(max_length=500)
     source_entry_id: str | None = None
-    provenance: Literal['fetched', 'pasted'] = 'pasted'
+    provenance: Literal['fetched', 'pasted', 'imported'] = 'pasted'
 
     @field_validator('title', 'text', mode='before')
     @classmethod
@@ -110,6 +110,7 @@ class ArchiveEntry(BaseModel):
 class ArchiveSettings(BaseModel):
     model_config = ConfigDict(extra='forbid')
     enabled: bool = False
+    scope: Literal['selected', 'library'] = 'selected'
     entry_ids: list[str] = Field(default_factory=list, max_length=MAX_ENTRIES)
 
     @field_validator('entry_ids')
@@ -276,8 +277,9 @@ GROUNDING_POLICY = '''Reference boundary for this reply: the following selected 
 Speak as the authored character, not as the original contributor. Do not claim their experiences as your own. Attribute a story or quote naturally in speech, for example "one anonymous contributor describes"; source IDs and links are displayed beside the reply, so do not read technical identifiers aloud. Preserve uncertainty and do not invent events or missing facts. These are user-selected passages from Queering the Map, not access to or a representative sample of the entire map. A pasted passage is user-provided reference text, not verified as fetched from its source URL; preserve the supplied provenance distinction. Use only relevant supplied evidence for source-based claims. For a source-based question with no relevant passage, say you cannot find that in the selected passages. Greetings and the authored character's own identity do not require a reference, but never invent a contributor's story to answer them. Do not infer contributors' identities or precise locations from their stories.'''
 
 
-def grounding_messages(matches):
+def grounding_messages(matches, scope='selected'):
     """Frame only bounded reference fields in a user message beneath fixed policy."""
+    if scope not in ('selected', 'library'): raise ValueError('Choose a supported archive scope.')
     references = []
     remaining = MAX_REFERENCE_TEXT
     for match in tuple(matches)[:MAX_MATCHES]:
@@ -295,7 +297,20 @@ def grounding_messages(matches):
                            'title': entry.title, 'source_url': entry.source_url,
                            'source_entry_id': entry.source_entry_id, 'provenance': entry.provenance,
                            'excerpt': excerpt})
-    payload = {'reference_scope': 'user-selected Queering the Map passages only',
+    policy = GROUNDING_POLICY
+    label = 'user-selected Queering the Map passages only'
+    if scope == 'library':
+        policy = policy.replace('following selected passages', 'following retrieved passages').replace(
+            'These are user-selected passages from Queering the Map, not access to or a representative sample of the entire map.',
+            'These are matching excerpts from a local imported Queering the Map database snapshot. '
+            'The snapshot can be incomplete or outdated; never claim to search the live entire map or represent all queer experiences.').replace(
+            'A pasted passage is user-provided reference text, not verified as fetched from its source URL;',
+            'Pasted and imported passages are supplied source material, not individually verified as fetched from their source URLs;').replace(
+            'cannot find that in the selected passages', 'cannot find that in the local archive')
+        label = 'local imported Queering the Map database; matching excerpts only'
+    elif any(reference['provenance'] == 'imported' for reference in references):
+        policy += '\nAn imported passage comes from a supplied export, not an independently verified individual fetch. Preserve that provenance.'
+    payload = {'reference_scope': label,
                'reference_count': len(references), 'references': references}
-    return [{'role': 'system', 'content': GROUNDING_POLICY},
+    return [{'role': 'system', 'content': policy},
             {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}]

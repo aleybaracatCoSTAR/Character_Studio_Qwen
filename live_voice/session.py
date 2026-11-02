@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 class LiveSession:
     def __init__(self, providers, character, send_json, send_bytes, voice=None, trigger=None, director=None, narrative=None, clock=time.monotonic,
-                 archive=None, archive_entries=()):
+                 archive=None, archive_entries=(), archive_search=None):
         self.providers = providers
         self.character = character
         self.send_json = send_json
@@ -56,6 +56,7 @@ class LiveSession:
         self.trigger_evidence = ""
         self.archive = archive if archive and archive.enabled else None
         self.archive_entries = tuple(archive_entries) if self.archive else ()
+        self.archive_search = archive_search if self.archive else None
         self.last_archive_context = None
 
     async def story_state(self):
@@ -282,11 +283,18 @@ class LiveSession:
             await self.send_json(transcript)
             archive_context = None
             if self.archive:
-                matches = retrieve(self.archive_entries, text, director_context)
-                archive_context = grounding_messages(matches)
+                scope = self.archive.scope
+                if scope == 'library':
+                    if self.archive_search is None: raise ValueError('The local archive snapshot is unavailable.')
+                    matches = await asyncio.to_thread(self.archive_search.search, text, director_context)
+                    count = self.archive_search.count
+                else:
+                    matches = retrieve(self.archive_entries, text, director_context)
+                    count = len(self.archive_entries)
+                archive_context = grounding_messages(matches, scope=scope)
                 self.last_archive_context = archive_context
-                await self.send_json({'type':'archive_sources','turn_id':turn_id,'scope':'selected',
-                                      'selected_count':len(self.archive_entries),'matches':matches})
+                await self.send_json({'type':'archive_sources','turn_id':turn_id,'scope':scope,
+                                      'selected_count':count,'matches':matches})
             plan = None
             if self.director.enabled:
                 check_started = time.perf_counter()
@@ -489,5 +497,8 @@ class LiveSession:
             self.story_task.cancel();await asyncio.gather(self.story_task,return_exceptions=True)
         if self.task:
             self.task.cancel(); await asyncio.gather(self.task, return_exceptions=True)
+        if self.archive_search is not None:
+            await asyncio.to_thread(self.archive_search.close)
+            self.archive_search = None
         await self.prepared_recognition.close()
         self.inspection.close()

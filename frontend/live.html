@@ -10,13 +10,18 @@
 <label>About them<textarea name="about" rows="4" maxlength="2400"></textarea></label><label>What do they want?<textarea name="goal" rows="2" maxlength="500"></textarea></label>
 <details id="archive-settings"><summary>Archive</summary>
 <label class="trigger-toggle"><input type="checkbox" id="archive-enabled"> Consult an archive</label>
-<p class="hint small">Searches the stories you add here, not the whole map. <a href="https://www.queeringthemap.com/" target="_blank" rel="noopener noreferrer">Open Queering the Map</a>.</p>
+<label>Search during the call<select id="archive-scope"><option value="selected">Selected stories</option><option value="library">Whole local archive</option></select></label>
+<p class="hint small">Searches your saved or imported collection, not the live map. <a href="https://www.queeringthemap.com/" target="_blank" rel="noopener noreferrer">Open Queering the Map</a>.</p>
+<p id="archive-library-count" class="hint small">0 stories in your archive</p>
+<div id="archive-search-form" class="archive-search" role="search" aria-label="Search saved stories"><label>Find stories<input id="archive-search" type="search" maxlength="200" placeholder="Search words or a place…"></label><button type="button" id="archive-search-submit" class="secondary">Search</button></div>
 <div class="archive-heading"><span id="archive-count" class="hint small">0 of 0 stories selected</span><button type="button" id="archive-add" class="quiet" aria-haspopup="dialog">+ Add story</button></div>
-<p id="archive-empty" class="hint small">No stories added yet. Choose an entry from Queering the Map, or paste a passage.</p>
-<ul id="archive-entries" class="archive-entries" aria-label="Selected story collection"></ul>
-<p id="archive-limit" class="hint small" hidden>The collection holds up to 50 stories. Remove one to add another.</p>
+<p id="archive-empty" class="hint small">No stories added yet. Import a collection, choose an entry, or paste a passage.</p>
+<ul id="archive-entries" class="archive-entries" aria-label="Saved stories"></ul>
+<div class="archive-pagination"><button type="button" id="archive-previous" class="quiet" disabled>Previous</button><span id="archive-page" class="hint small" aria-live="polite">0 results</span><button type="button" id="archive-next" class="quiet" disabled>Next</button></div>
+<p id="archive-limit" class="hint small" hidden>A character can select up to 50 stories. Uncheck one to choose another, or search the whole local archive.</p>
+<details class="archive-import"><summary>Import collection</summary><label>Collection file<input id="archive-import-file" type="file" accept=".json,.jsonl,.csv"></label><p class="hint small">JSON, JSONL or CSV · up to 128 MiB. Imported passages remain labelled as not individually verified.</p><button type="button" id="archive-import" class="secondary" disabled>Import collection</button></details>
 <p id="archive-status" class="hint small" role="status" aria-live="polite"></p><button type="button" id="archive-reload" class="quiet" hidden>Try loading stories again</button>
-<p class="hint small archive-credit">Queering the Map material: <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC-SA 4.0</a>. Pasted passages remain labelled separately. End the call before changing the collection.</p>
+<p class="hint small archive-credit">Queering the Map material: <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC-SA 4.0</a>. Imported and pasted passages remain labelled separately. End the call before editing the archive.</p>
 </details>
 <details><summary>World & memories</summary><label>Environment<textarea name="environment" rows="3" maxlength="700"></textarea></label><label>Memories<textarea name="memories" rows="3" maxlength="1200"></textarea></label><label>What must stay true?<textarea name="rules" rows="3" maxlength="1000"></textarea></label><label>Current story moment<textarea name="beat" rows="2" maxlength="500"></textarea></label></details>
 <details><summary>How they speak</summary>

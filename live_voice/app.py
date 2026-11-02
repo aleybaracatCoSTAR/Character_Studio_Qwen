@@ -1,11 +1,15 @@
 import asyncio
 from contextlib import asynccontextmanager
+from functools import partial
 import json
 import os
 from pathlib import Path
+import sqlite3
+import tempfile
 import time
+from urllib.parse import unquote
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -22,7 +26,40 @@ from .deployment import profile
 from .inspection_downloads import ExportDownloads, MAX_EXPORT_BYTES
 from .presets import preset, presets
 from .archive import ArchiveSettings, ArchiveStore
+from .archive_database import ArchiveDatabase, MAX_IMPORT_BYTES, MAX_DATABASE_ENTRIES
 from .archive_source import QueeringTheMap, ArchiveSourceUnavailable, qtm_entry_id
+
+
+async def _archive_job(callback, *args, dispose=None, **kwargs):
+    """Keep ownership of a finite worker after caller cancellation.
+
+    Thread cancellation cannot stop an import transaction. Wait for its actual
+    completion before the caller removes its upload or releases the write lock.
+    A canceled snapshot creation also closes the otherwise unclaimed result.
+    Shield the executor Future directly, without a separately cancelable Task.
+    """
+    worker = asyncio.get_running_loop().run_in_executor(None, partial(callback, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError as cancelled:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue  # Repeated cancellation must not abandon the thread.
+            except BaseException:
+                break
+        try:
+            result = worker.result()
+        except BaseException:
+            pass  # Retrieve worker errors, but preserve the caller cancellation.
+        else:
+            if dispose is not None:
+                try:
+                    await _archive_job(dispose, result)
+                except BaseException:
+                    pass  # Disposal is owned to completion; cancellation wins.
+        raise cancelled
 
 
 def create_app(preview=False, providers=None, vad_factory=None, archive_store=None, archive_importer=None):
@@ -40,7 +77,8 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                                           verification_timeout=os.environ.get('LIVE_VOICE_VERIFY_TIMEOUT','20'))
     call_lock = asyncio.Lock()
     downloads = ExportDownloads()
-    archive_store = archive_store or ArchiveStore(Path(os.environ.get('LIVE_ARCHIVE_DIR') or
+    owns_archive_store = archive_store is None
+    archive_store = archive_store or ArchiveDatabase(Path(os.environ.get('LIVE_ARCHIVE_DIR') or
         str(Path(os.environ.get('LIVE_VOICE_STORE', str(Path.home() / '.local/share/character-studio'))) / 'archive')))
     archive_importer = archive_importer or QueeringTheMap()
     archive_write_lock = asyncio.Lock()
@@ -52,6 +90,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         if task and not task.done(): task.cancel()
         downloads.clear()
         await services.close()
+        if owns_archive_store: await asyncio.to_thread(archive_store.close)
 
     app = FastAPI(title="Character Studio · Live voice", lifespan=lifespan)
 
@@ -76,8 +115,75 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         except (OSError, ValueError):
             raise HTTPException(status_code=503,detail='The selected-story archive could not be read. Check its local storage.') from None
 
+    def archive_page(q='', offset=0, limit=25):
+        if isinstance(archive_store, ArchiveDatabase):
+            try: return {**archive_store.page(query=q,offset=offset,limit=limit),
+                         'scope':'library','selection_limit':50,'capacity':MAX_DATABASE_ENTRIES}
+            except (OSError, ValueError, sqlite3.Error):
+                raise HTTPException(status_code=503,detail='The local archive database could not be searched.') from None
+        return {'entries':read_archive(),'limit':50,'scope':'selected'}
+
     @app.get('/api/archive/entries')
-    def archive_entries(): return {'entries':read_archive(),'limit':50,'scope':'selected'}
+    def archive_entries(q: str = Query('',max_length=200), offset: int = Query(0,ge=0),
+                        limit: int = Query(25,ge=1,le=50)):
+        return archive_page(q,offset,limit)
+
+    @app.get('/api/archive/selection')
+    def archive_selection(ids: str = Query('',max_length=1700)):
+        try:
+            selected = ArchiveSettings(entry_ids=ids.split(',') if ids else []).entry_ids
+            entries = []
+            for entry_id in selected:
+                try: entries.extend(entry.model_dump() for entry in archive_store.snapshot([entry_id]))
+                except KeyError: pass
+            return {'entries':entries}
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400,detail='Choose at most 50 saved story IDs.') from None
+        except (OSError, sqlite3.Error):
+            raise HTTPException(status_code=503,detail='The selected stories could not be read.') from None
+
+    @app.post('/api/archive/import')
+    async def import_archive_file(request: Request):
+        require_archive_origin(request)
+        if not isinstance(archive_store, ArchiveDatabase):
+            raise HTTPException(status_code=409,detail='Restart with the archive database enabled to import a collection.')
+        if request.headers.get('content-type','').split(';',1)[0].strip().lower() != 'application/octet-stream':
+            raise HTTPException(status_code=400,detail='Upload a JSON, JSONL or CSV collection file.')
+        filename = unquote(request.headers.get('x-archive-filename',''))
+        suffix = Path(filename).suffix.lower()
+        if suffix not in ('.json','.jsonl','.csv') or len(filename)>500:
+            raise HTTPException(status_code=400,detail='Choose a JSON, JSONL or CSV collection file.')
+        declared = request.headers.get('content-length')
+        if declared is not None:
+            try:
+                if int(declared)<0: raise ValueError()
+                if int(declared)>MAX_IMPORT_BYTES:
+                    raise HTTPException(status_code=413,detail='The collection file exceeds 128 MiB.')
+            except ValueError:
+                raise HTTPException(status_code=400,detail='The collection upload size is invalid.') from None
+        async with archive_write_lock:
+            if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before importing a collection.')
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(prefix='character-archive-',suffix=suffix,delete=False) as stream:
+                    temporary = Path(stream.name)
+                    size = 0
+                    async for packet in request.stream():
+                        size += len(packet)
+                        if size>MAX_IMPORT_BYTES:
+                            raise HTTPException(status_code=413,detail='The collection file exceeds 128 MiB.')
+                        stream.write(packet)
+                if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before importing a collection.')
+                result = await _archive_job(archive_store.import_file, temporary)
+                return {**result,**archive_page()}
+            except OverflowError:
+                raise HTTPException(status_code=413,detail='The collection exceeds the archive capacity or story-length limit.') from None
+            except (ValueError, TypeError, UnicodeError):
+                raise HTTPException(status_code=400,detail='The collection could not be imported. Check its format and story fields; no partial import was saved.') from None
+            except (OSError, sqlite3.Error):
+                raise HTTPException(status_code=503,detail='The collection could not be saved to the local database.') from None
+            finally:
+                if temporary is not None: temporary.unlink(missing_ok=True)
 
     @app.post('/api/archive/entries', status_code=201)
     async def add_archive_entry(request: Request):
@@ -109,15 +215,15 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 entry = await archive_importer.fetch(entry_id) if entry_id is not None else values
                 if entry_id is not None: entry = {**entry,'provenance':'fetched'}
                 if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before changing its archive.')
-                saved = archive_store.add(**entry)
-                return {'entry':saved,'entries':archive_store.list()}
+                saved = await _archive_job(archive_store.add,**entry)
+                return {'entry':saved,**archive_page()} if isinstance(archive_store,ArchiveDatabase) else {'entry':saved,'entries':archive_store.list()}
             except ArchiveSourceUnavailable:
                 raise HTTPException(status_code=502,detail='That story could not be read from Queering the Map. Check its number, or paste a selected story instead.') from None
             except OverflowError:
                 raise HTTPException(status_code=413,detail='This archive is full or the story is too long. Remove a story before adding more.') from None
             except (ValueError, TypeError):
                 raise HTTPException(status_code=400,detail='Use a nonempty story, a short title and a valid Queering the Map source URL.') from None
-            except OSError:
+            except (OSError, sqlite3.Error):
                 raise HTTPException(status_code=503,detail='The story could not be saved to the local archive.') from None
 
     @app.delete('/api/archive/entries/{entry_id}')
@@ -126,9 +232,9 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         async with archive_write_lock:
             if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before changing its archive.')
             try:
-                if not archive_store.remove(entry_id): raise HTTPException(status_code=404,detail='Story not found.')
-                return {'entries':archive_store.list()}
-            except (ValueError, OSError):
+                if not await _archive_job(archive_store.remove,entry_id): raise HTTPException(status_code=404,detail='Story not found.')
+                return archive_page() if isinstance(archive_store,ArchiveDatabase) else {'entries':archive_store.list()}
+            except (ValueError, OSError, sqlite3.Error):
                 raise HTTPException(status_code=503,detail='The story could not be removed from the local archive.') from None
 
     @app.get("/api/example")
@@ -161,7 +267,9 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 "model_inspection":True,
                 "inspection_download":True,
                 "character_presets":True,
-                "archive":{"available":True,"scope":"selected","limit":50},
+                "archive":({"available":True,"scope":"library","limit":MAX_DATABASE_ENTRIES,
+                            "selection_limit":50,"bulk_import":True} if isinstance(archive_store,ArchiveDatabase)
+                           else {"available":True,"scope":"selected","limit":50}),
                 "beat_entry_replies":True, "voice_retry":True,
                 "voice_verification":bool(getattr(services,'verify_voice',False)),
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
@@ -214,6 +322,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             await socket.close(code=1013, reason="Preview mode or another active call."); return
         await call_lock.acquire()
         session = None
+        archive_search = None
         send_lock = asyncio.Lock()
         async def send_json(value):
             async with send_lock: await socket.send_json(value)
@@ -236,8 +345,15 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             narrative = NarrativeSettings.model_validate(config.get("narrative", {}))
             archive = ArchiveSettings.model_validate(config.get('archive', {}))
             try:
-                archive_entries = archive_store.snapshot(archive.entry_ids) if archive.enabled else ()
-            except (KeyError, ValueError, OSError):
+                archive_entries = ()
+                if archive.enabled:
+                    async with archive_write_lock:
+                        if archive.scope == 'library':
+                            if not isinstance(archive_store,ArchiveDatabase): raise ValueError('Database unavailable.')
+                            archive_search = await _archive_job(archive_store.open_snapshot, dispose=lambda snapshot:snapshot.close())
+                        else:
+                            archive_entries = await _archive_job(archive_store.snapshot,archive.entry_ids)
+            except (KeyError, ValueError, OSError, sqlite3.Error):
                 await send_json({'type':'error','message':'The selected archive changed. End the call, check its stories and try again.'})
                 return
             if vad_factory:
@@ -247,7 +363,8 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 vad = webrtcvad.Vad(2)
                 detector = TurnDetector(lambda pcm:vad.is_speech(pcm,16000))
             session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director,
-                                  narrative=narrative, archive=archive if archive.enabled else None, archive_entries=archive_entries)
+                                  narrative=narrative, archive=archive if archive.enabled else None, archive_entries=archive_entries,
+                                  archive_search=archive_search)
             listen_after = 0.0
             def clear_microphone():
                 detector.pending.clear(); detector.reset()
@@ -344,6 +461,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             except RuntimeError: pass
         finally:
             if session: await session.close()
+            elif archive_search is not None: await asyncio.to_thread(archive_search.close)
             call_lock.release()
             try: await socket.close()
             except RuntimeError: pass

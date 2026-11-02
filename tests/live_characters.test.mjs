@@ -27,6 +27,15 @@ test('archive profiles persist only selected entry IDs and cannot copy source te
   assert.deepEqual(library.switchTo('local-character').archive,profile.archive);
 });
 
+test('whole-library archive scope persists without storing corpus text in the browser',()=>{
+  const saved=storage(),data={...current(),archive:{enabled:true,scope:'library',entry_ids:['b'.repeat(32)],text:'Private source text'}};
+  const library=new CharacterLibrary({storage:saved,current:data,presets:[kaden()]});
+  const reloaded=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()]});
+  assert.deepEqual(reloaded.active().archive,{enabled:true,scope:'library',entry_ids:['b'.repeat(32)]});
+  assert.equal(JSON.stringify(reloaded.active()).includes('Private source text'),false);
+  library.switchTo('kaden');assert.equal(library.active().archive,undefined);
+});
+
 test('the separate archive view cannot overwrite the main library or its surviving legacy character',()=>{
   const saved=storage(),main=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()]});
   main.writeLegacy();const before=saved.getItem(CHARACTER_LIBRARY_KEY),legacy=saved.getItem('live-character-v1');

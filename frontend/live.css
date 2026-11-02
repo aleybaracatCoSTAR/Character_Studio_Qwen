@@ -3,6 +3,7 @@
 .trigger-toggle{display:flex;align-items:center;gap:8px}.trigger-actions{display:flex;align-items:center;gap:14px}
 .character-picker{margin:0 0 6px}.character-picker select{font-weight:600}#character-library-note{margin:6px 0 20px;line-height:1.5}
 .brand-area{display:flex;align-items:center;gap:18px;min-width:0}.archive-nav{font-size:12px;color:#706a63;text-decoration:underline;text-underline-offset:3px}
+.archive-search{display:flex;align-items:flex-end;gap:8px;margin:12px 0}.archive-search label{flex:1;min-width:0;margin:0}.archive-search button{flex-shrink:0;margin-bottom:0}.archive-pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0}.archive-pagination .hint{margin:0;text-align:center}.archive-import{margin-top:12px!important}.archive-import input[type=file]{width:100%;font-size:11px;padding:8px}.archive-import>.hint{margin:8px 0}#archive-library-count{margin:8px 0}
 
 #director-note{white-space:pre-wrap;margin:12px 0}#director-latest{margin:0 0 12px;padding:0 6px}#director-latest summary{color:var(--muted);font-size:13px}
 

@@ -1,46 +1,34 @@
-# Character + archive · Queering the Map
+# Character + archive
 
-Open **`/archive/`** on the existing live server, for example `http://127.0.0.1:18091/archive/`. This is still the character interface: name, identity, goals, voice, environment, memories and optional director controls remain editable. The included **Mika** character is a fictional archive keeper, not a contributor or official representative of Queering the Map. You can rename or rewrite it.
+Open `/archive/` to speak to **Mika**, an editable fictional character that consults Queering the Map stories. The normal character interface, voice settings, memories, director and narrative controls remain available. The archive page keeps a separate browser character library, preserving the main Karim/KADEN view.
 
-The archive view has its own browser character-library key. Opening it does not replace the main view's active Karim/KADEN character or its legacy saved fields. Both views can use the local selected-story collection, but each character saves only its own enabled flag and selected entry IDs. Source text is not written to browser localStorage.
+## Whole local archive or selected stories
 
-![Mika with one selected Queering the Map story in the local design preview](screenshots/archive-preview.png)
+Under **Archive**, enable **Consult an archive** and choose the search scope:
 
-## First test
+- **Whole local archive** retrieves matching stories from the imported database, without selecting individual records.
+- **Selected stories** restricts a call to up to 50 deliberately chosen records. Selections survive pagination and search filters.
 
-1. Pull the latest code and restart your existing live stack. No model installation or new weights are needed.
-2. Open `/archive/`. **Mika** is selected on the first visit; **Consult an archive** is on.
-3. Under **Archive**, choose **Add story**. Import one numeric story ID or an individual JSON entry URL such as `https://www.queeringthemap.com/moment/1`. This route reads one entry; it does not open a pin on the map.
-4. Alternatively, open the map, select a story, and use **Or paste a story**. The optional source link can be the homepage or an individual entry URL. Pasted passages stay marked as user-provided and unverified, even when a source link was supplied.
-5. Check the stories this character may consult. **Start call** uses your microphone; **Test with text** keeps the existing text-to-voice test.
-6. Ask about a subject present in those stories, then try “Tell me more about that story.” **Sources for this reply** shows the retrieved excerpts and original links. These are the passages supplied to the models, not a claim that every generated word is a verified quotation.
-7. Open **See what the model sees** to inspect or download the actual director/actor request, including its reference context.
+**Find stories** searches the saved collection, with counts and pages of 25 results. **Add story** still fetches one explicitly chosen moment ID or accepts pasted text. **Import collection** accepts JSON, JSONL and CSV files up to 128 MiB, validates them and commits them atomically. Duplicate text from the same source is deduplicated. Imported, pasted and individually fetched sources retain distinct provenance.
 
-End the call before adding, removing or selecting stories. Each call uses an immutable snapshot of its selected entries. Reference data never replaces the character's biography or becomes its own lived memories. The one-emotion, whole-reply Drama 3 voice path and existing Retry voice flow are retained.
+For the larger first-party collection, follow [the database guide](QTM_DATABASE.md). It includes a no-GPU command to download the official public text snapshot and index it on Surrey. The snapshot imported locally on 2 November 2026 contains 123,209 stories; it is a dated deployment export, not a claim to contain every live story.
 
-## Scope and connection
+## Storage and migration
 
-This prototype searches **up to 50 explicitly selected stories**, with 300,000 total text characters. It does not search, copy or claim knowledge of the whole map. Its small local lexical index ranks at most three relevant passages per turn, with up to 6,000 reference characters. A vague follow-up can reuse the previous question's topic; unrelated earlier questions are not accumulated into a global search query. It may miss synonyms, translations or location queries when a place is not named in the story text. No embedding model or fine-tuning is used.
+`ArchiveDatabase` stores source records and a SQLite FTS5 index in `archive.sqlite3`, under `LIVE_ARCHIVE_DIR`, otherwise `$LIVE_VOICE_STORE/archive`, otherwise `~/.local/share/character-studio/archive`. It supports up to 500,000 stories. The original 50-entry `selected-stories.json` manifest is migrated once without deleting that file or changing saved local entry IDs.
 
-The current [official frontend](https://github.com/radical-data/queering-the-map/blob/main/src/lib/Map.svelte) reads individual stories from [`GET /moment/{id}`](https://github.com/radical-data/queering-the-map/blob/main/src/routes/moment/%5Bid%5D/%2Bserver.ts). It returns `short_id` and `description`. This is the site's own unversioned read endpoint, not a promised external service. No full-text search route was found in the reviewed source. The connector makes one bounded request for the ID you select, follows no redirects and sends no conversation or character data to the site. Imported HTML is displayed as plain text with scripts/styles removed.
+The source snapshot and retrieval database stay outside Git. The official download also records its URL, date, license, byte count and SHA-256. It does not download coordinates. Reuse and explicit ETag refresh are described in the database guide; refresh is additive rather than an automatic deletion sync.
 
-The next step for a whole-archive experience is an agreed structured export or supported search integration with the project. That would support a larger index and location/theme search without pretending the current selected-story prototype has corpus-wide access.
+## What reaches the character
 
-## Storage and API
+For each question, lexical full-text retrieval supplies at most three excerpts, 2,000 characters each and 6,000 characters total. A vague follow-up may reuse the recent question's topic. A new topic searches separately. The same retrieved source JSON reaches the actor, director and visible source cards, and is captured by the model-input viewer.
 
-`LIVE_ARCHIVE_DIR` can select a dedicated data directory. Otherwise the manifest is at `$LIVE_VOICE_STORE/archive/selected-stories.json`, or `~/.local/share/character-studio/archive/selected-stories.json` when no store is configured. Writes are atomic. Imported stories, microphone recordings and call transcripts are not committed to this repository; the archive stores only the selected story text and provenance metadata. Calls and heard dialogue retain the existing RAM-only conversation memory.
+Fixed grounding instructions treat titles and excerpts as untrusted data. Mika attributes anonymous accounts rather than claiming them as personal memories; the model is told to preserve uncertainty, avoid identity or precise-location inference and say when no matching evidence was found. Imported text is not represented as individually fetched or verified. A larger snapshot does not make results representative of all queer experiences.
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/archive/entries` | Read the local selected collection |
-| `POST /api/archive/entries` | Import one numeric `entry_id`, or save pasted `title`, `text`, `source_url` |
-| `DELETE /api/archive/entries/{id}` | Remove a selected local entry |
-| WebSocket start `archive` | `{enabled,entry_ids}`; freezes a snapshot for this call |
+Calls freeze their source collection. Whole-archive calls use a private in-memory SQLite snapshot; selected-story calls copy only their selected records. Normal uploads, additions and deletions are blocked during calls. A voice-only retry keeps the original references and wording without a fresh search. Ending the call closes the snapshot; start a new call after an import to use the new collection.
 
-Writes require the studio's own browser origin and are refused during a call. Imported entries are marked `fetched`; manually provided passages are marked `pasted`. A matching numeric source URL alone never makes a pasted text verified. Removing a story changes only this local collection, not Queering the Map.
+This adds retrieval rather than training the models. It uses the existing actor, director, STT and TTS services, with no extra model weights or GPU. Local tests and browser checks do not establish real-model factual accuracy or voice quality.
 
-## Attribution and validation
+## Attribution
 
-The project’s [official FAQ](https://github.com/radical-data/queering-the-map/blob/main/src/lib/content/faqs.yaml) identifies the contributions as **CC BY-NC-SA 4.0**. The UI credits Queering the Map and links each supplied source and the [license](https://creativecommons.org/licenses/by-nc-sa/4.0/). This is a noncommercial test of selected passages; source text, plain-text conversion and AI interpretation remain distinguishable. See the project's terms for wider reuse and contact the team for a full-archive collaboration.
-
-CPU tests cover selection isolation, retrieval relevance, follow-ups, no-match reference context, source/provenance framing, exact inspected requests, storage bounds, write races, URL validation and voice retry. Browser checks confirmed one real entry import, persistence across refresh and preservation of the main test character. The public `/moment/1` connection was checked on 29 October 2026. No real actor/director/TTS calls were made for the archive update; instruction tests do not establish factual accuracy or acted voice quality.
+Source cards link to each Queering the Map entry and its [CC BY-NC-SA 4.0 license](https://creativecommons.org/licenses/by-nc-sa/4.0/). Credit Queering the Map, identify transformations such as HTML-to-plain-text conversion, and follow its noncommercial and ShareAlike terms. See the [official FAQ and source links](QTM_DATABASE.md#source-and-reuse).

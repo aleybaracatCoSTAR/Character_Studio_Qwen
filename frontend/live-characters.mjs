@@ -22,6 +22,7 @@ export function characterProfile(value,id=value?.id){
         [key,['min_seconds','max_seconds'].includes(key)?(Number.isFinite(beat?.[key])?beat[key]:key==='min_seconds'?15:90)
           :typeof beat?.[key]==='string'?beat[key]:'']))):[]}};
   if(value.archive&&typeof value.archive==='object')profile.archive={enabled:value.archive.enabled===true,
+    ...(value.archive.scope==='library'?{scope:'library'}:{}),
     entry_ids:[...new Set(Array.isArray(value.archive.entry_ids)?value.archive.entry_ids.filter(id=>typeof id==='string'&&/^[a-f0-9]{32}$/.test(id)):[])].slice(0,50)};
   return profile;
 }
