@@ -75,6 +75,21 @@ The numeric ID produces the canonical link `https://www.queeringthemap.com/momen
 
 The download and import size limit is 128 MiB. Invalid files produce a safe error instead of printing contributor text. The database import validates the complete file before committing records.
 
+## If an import fails
+
+The importer reports the chosen archive directory and separates preparing the source, opening/migrating the database, importing records and closing it. A failed import reports a fixed reason and safe diagnostic fields, rather than contributor text or arbitrary exception messages. A completed cache download is kept and can be reused on the next run.
+
+| Diagnostic | Next check |
+|---|---|
+| SQLite busy/locked | Stop the other portal/import that is using this archive, then retry. |
+| Read-only/cannot open, or an OS access error | Check that the printed directory is the intended destination and writable by your account. |
+| Storage full/quota | Check available space and account quota before retrying. |
+| SQLite I/O error | Check cluster filesystem/locking support; preserve the current archive while investigating. |
+| Invalid legacy archive/schema | Preserve `selected-stories.json` and the database; inspect the old format instead of deleting or resetting it. |
+| Invalid import row | Use the reported row number to check the source record locally; do not paste a contributor's story into diagnostic logs. |
+
+The early generic message “The story file could not be imported” did not establish any of these causes. For the first reported Surrey failure, the user's checks confirmed SQLite 3.53.1, working in-memory FTS5, a 21,696,338-byte cached snapshot at the expected directory, and a database that opens successfully with one saved story. The remaining failure is importing records or closing the database afterward; its safe diagnostic line is needed to identify the cause. Do not change the Torch/CUDA environment or re-download models to diagnose this archive issue.
+
 ## Source and reuse
 
 The fixed download source is the first-party public asset:

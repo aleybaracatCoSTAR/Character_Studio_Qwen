@@ -1,4 +1,12 @@
-# Latest change: a larger local Queering the Map database, 2 November 2026
+# Latest change: archive import failure diagnostics, 2 November 2026
+
+The user pulled `affd4a2` on Surrey, but the bulk import returned the old generic error. Subsequent checks confirm the expected scratch archive path, SQLite 3.53.1 with working in-memory FTS5, a 21,696,338-byte downloaded snapshot, and a database that opens with one existing story. Those results narrow the outstanding failure to importing records or closing the database; they do not establish a bad source, storage failure or missing dependency.
+
+`scripts/import_qtm_archive.py` now prints the chosen directory and phases `prepare_source`, `open_database`, `import_records`, `close_database`. Errors report fixed guidance plus bounded JSON codes for SQLite, filesystem, known legacy/schema validation and exact row numbers. A bounded cause/context walk retains suppressed SQLite errors without rendering raw exception messages. SQLite extended names are emitted only when they match the installed module's numeric enum constant. Contributor text, arbitrary SQL/exception details and input paths inside exceptions remain excluded. Closing is still attempted, and a close error cannot mask the original import failure.
+
+The 491-test Python suite passed, followed by 14 passing focused diagnostic tests after adding a real-SQLite extended-name check (492 tests now present). JavaScript is unchanged from its 124 passing tests. Diagnostics cover wrapped SQLite failures, filesystem codes, malformed/Pydantic-like errors, row retention, all stages, cleanup precedence and private-text suppression. No source database is reset, permissions relaxed, model packages changed or GPU invoked. The user can pull and repeat cached `--download` to obtain the actual Surrey failure code; the underlying import is not yet fixed or claimed successful. See [QTM_DATABASE.md](QTM_DATABASE.md#if-an-import-fails).
+
+# Previous change: a larger local Queering the Map database, 2 November 2026
 
 The archive now supports a persistent SQLite FTS5 collection of up to 500,000 stories. The official first-party `data/descriptions.json` snapshot was downloaded once into ignored local storage and imported successfully: **123,209 stories**, **21,696,338 source bytes**, no rejected rows or duplicates. Its metadata records the source, retrieval date, SHA-256, ETag and CC BY-NC-SA 4.0 attribution. No coordinates, credentials, Supabase access, individual-ID crawling or third-party mirror were used. The imported database remains outside Git at `outputs/queering-the-map/archive/archive.sqlite3` on the development Mac; Surrey still needs its own import.
 
