@@ -3,13 +3,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 prepare=0
 export LIVE_PROFILE="${LIVE_PROFILE:-shared}"
+export LIVE_LISTENING_MODE="${LIVE_LISTENING_MODE:-baseline}"
 while (($#)); do
   case "$1" in
     --prepare) prepare=1; shift ;;
     --profile) [[ $# -gt 1 ]] || { echo 'Supply a profile name.' >&2; exit 1; }; export LIVE_PROFILE="$2"; shift 2 ;;
+    --listening) [[ $# -gt 1 ]] || { echo 'Supply a listening mode.' >&2; exit 1; }; export LIVE_LISTENING_MODE="$2"; shift 2 ;;
     --help|-h)
-      echo 'Usage: bash scripts/run_live_stack.sh [--profile shared|quality-2gpu|quality-3gpu] [--prepare]'
+      echo 'Usage: bash scripts/run_live_stack.sh [--profile shared|quality-2gpu|quality-3gpu] [--listening baseline|nemotron-smart-turn] [--prepare]'
       echo 'Profiles require 1, 2 or 3 allocated H200s on the same node. --prepare downloads missing checkpoints.'
+      echo 'Experimental listening needs quality-3gpu plus scripts/setup_listening.sh and its explicit model download.'
       exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -29,18 +32,32 @@ export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 .venv-drama3/bin/python - <<'PYGPU'
 import os
 from live_voice.deployment import profile,assigned_devices
+from live_voice.listening_config import listening_mode,listening_profile
 try:
-    cfg=profile();devices=assigned_devices(cfg,os.environ['CUDA_VISIBLE_DEVICES'])
+    cfg=listening_profile(profile());devices=assigned_devices(cfg,os.environ['CUDA_VISIBLE_DEVICES'])
 except ValueError as exc:raise SystemExit(str(exc))
 print('Live profile:',os.environ['LIVE_PROFILE'],'· allocated placement:',devices,flush=True)
+print('Listening mode:',listening_mode(),flush=True)
 PYGPU
 .venv-drama3/bin/python experiments/drama3/check_install.py
 .venv-drama3/bin/python - <<'PY'
 from live_voice.deployment import profile,check_ports
+from live_voice.listening_config import EXPERIMENT,PORT,listening_mode
 ports=[18091,18092,18093]+([18094] if profile()['director'] else [])
+if listening_mode()==EXPERIMENT:ports.append(PORT)
 try: check_ports(ports)
 except ValueError as exc: raise SystemExit(str(exc))
 PY
+if [[ "$LIVE_LISTENING_MODE" == nemotron-smart-turn ]]; then
+  [[ -x .venv-listening/bin/python ]] || { echo 'Run bash scripts/setup_listening.sh first.' >&2; exit 1; }
+  .venv-listening/bin/python - <<'PYLISTEN'
+from pathlib import Path
+import os
+from scripts.download_listening_models import validate_store
+validate_store(Path(os.environ.get('LISTENING_STORE') or str(Path(os.environ['LIVE_VOICE_STORE'])/'listening')))
+print('Experimental listening checkpoints verified; no model was loaded.',flush=True)
+PYLISTEN
+fi
 if [[ "$prepare" == 1 ]]; then
   echo 'Preparing the live app environment; reusing the working Drama 3 GPU environment.'
   bash scripts/setup_live.sh
@@ -57,7 +74,7 @@ missing=[str(p) for p in paths if not p.is_file()]
 if missing:raise SystemExit('Missing models: '+', '.join(missing)+'. Run this profile with --prepare.')
 PYMODELS
 mkdir -p "$LIVE_VOICE_STORE/logs"
-tts_pid=''; llm_pid=''; director_pid=''
+tts_pid=''; llm_pid=''; director_pid=''; listening_pid=''
 cleanup(){
   trap - EXIT
   trap '' INT TERM
@@ -65,12 +82,14 @@ cleanup(){
   [[ -z "$tts_pid" ]] || groups+=("$tts_pid")
   [[ -z "$llm_pid" ]] || groups+=("$llm_pid")
   [[ -z "$director_pid" ]] || groups+=("$director_pid")
+  [[ -z "$listening_pid" ]] || groups+=("$listening_pid")
   if ((${#groups[@]})); then
     echo "Stopping this launch's inference servers and waiting for their workers to exit…"
     .venv-live/bin/python scripts/live_process.py stop "${groups[@]}" || true
     [[ -z "$tts_pid" ]] || wait "$tts_pid" 2>/dev/null || true
     [[ -z "$llm_pid" ]] || wait "$llm_pid" 2>/dev/null || true
     [[ -z "$director_pid" ]] || wait "$director_pid" 2>/dev/null || true
+    [[ -z "$listening_pid" ]] || wait "$listening_pid" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -94,6 +113,12 @@ wait_health(){
   done
   echo "$label did not become healthy. Read its log." >&2; return 1
 }
+if [[ "$LIVE_LISTENING_MODE" == nemotron-smart-turn ]]; then
+  echo "Starting experimental listening. Log: $LIVE_VOICE_STORE/logs/listening.log"
+  .venv-live/bin/python scripts/live_process.py start bash scripts/run_live_listening.sh >"$LIVE_VOICE_STORE/logs/listening.log" 2>&1 & listening_pid=$!
+  wait_health 18095 "$listening_pid" listening
+  export LIVE_LISTENING_URL=http://127.0.0.1:18095
+fi
 echo "Starting Drama 3. Log: $LIVE_VOICE_STORE/logs/tts.log"
 .venv-live/bin/python scripts/live_process.py start bash scripts/run_live_tts.sh >"$LIVE_VOICE_STORE/logs/tts.log" 2>&1 & tts_pid=$!
 wait_health 18093 "$tts_pid" tts

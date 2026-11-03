@@ -1,4 +1,14 @@
-# Latest change: preserve literal text in the official QTM export, 2 November 2026
+# Latest change: optional streaming listening experiment, 3 November 2026
+
+The portal can now run `--listening nemotron-smart-turn` with `quality-3gpu`. It uses native Transformers 5.13 cache-aware Nemotron RNNT (0.6B English, six lookahead tokens/560 ms chunk) on the director's allocated GPU plus Smart Turn v3.2 CPU ONNX. The experimental director reservation is 75% instead of 85%; baseline configuration is unchanged. Setup, explicit pinned checkpoint download and runtime live in `.venv-listening`, without changing matched Torch/vLLM voice environments. See [LISTENING_EXPERIMENT.md](LISTENING_EXPERIMENT.md) and [exact setup/provenance](../experiments/listening/README.md).
+
+One active utterance streams PCM incrementally with a 200 ms preroll, bounded queues/cache, 15-second cap and padded final window. ASR and Smart Turn have separate owned workers, so turn classification can complete while RNNT waits for incoming audio. VAD proposes a pause at 300 ms; classification rechecks every 200 ms and an explicit 1,200 ms pause limit prevents indefinite waiting. Resumed speech invalidates stale decisions. Interim text is temporary UI feedback; only the finalized transcript reaches the existing actor/history/archive/inspection path. Typed input, mute, cue, interruption and disconnect cancel unfinished recognition.
+
+Port 18095 is internal. The launcher verifies local hashes and readiness before starting other models, owns cleanup, accepts actual allocated GPU tokens and forwards batch script arguments. Startup/model errors are fixed messages without contributor text/audio in logs. No automatic package installation, checkpoint download, GPU request or old-process termination is added.
+
+This experiment focuses on listening. The director still precedes the actor; whole-reply emotion/voice, transport checks and Faster-Whisper spoken-word verification remain unchanged. The 568 Python and 130 JavaScript checks include genuine loopback client/server transport, concurrency, cancellation and baseline regressions. A disconnect regression uncovered cancellation interrupting app cleanup; shielded cleanup now closes recognition/session ownership and releases the call lock before another call is admitted. A Surrey installation, H200 memory-fit check and same-prompt latency/accuracy comparison are still required; no new model inference or speedup was demonstrated locally. The larger QTM import subsequently succeeded on Surrey: 123,209 new stories, 123,210 including its pre-existing entry.
+
+# Previous change: preserve literal text in the official QTM export, 2 November 2026
 
 The new Surrey diagnostic identified `invalid_import_row` at row 55,666. The matching cached source record contains only the broken-heart emoticon `</3`. CPython 3.12.15's HTMLParser treats this incomplete closing-tag-like fragment as a discarded bogus comment, whereas local Python 3.11 retains it. The importer was unnecessarily routing the official numeric-ID-to-text map through HTML conversion. Official submission/export code confirms these values are literal textarea strings.
 

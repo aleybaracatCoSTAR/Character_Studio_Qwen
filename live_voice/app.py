@@ -9,6 +9,7 @@ import tempfile
 import time
 from urllib.parse import unquote
 
+from anyio import CancelScope
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +29,8 @@ from .presets import preset, presets
 from .archive import ArchiveSettings, ArchiveStore
 from .archive_database import ArchiveDatabase, MAX_IMPORT_BYTES, MAX_DATABASE_ENTRIES
 from .archive_source import QueeringTheMap, ArchiveSourceUnavailable, qtm_entry_id
+from .listening import ListeningClient, ListeningSession, ListeningError
+from .listening_config import EXPERIMENT, listening_mode, listening_profile
 
 
 async def _archive_job(callback, *args, dispose=None, **kwargs):
@@ -62,8 +65,10 @@ async def _archive_job(callback, *args, dispose=None, **kwargs):
         raise cancelled
 
 
-def create_app(preview=False, providers=None, vad_factory=None, archive_store=None, archive_importer=None):
-    deployment = profile()
+def create_app(preview=False, providers=None, vad_factory=None, archive_store=None, archive_importer=None, listening_client=None):
+    input_mode = listening_mode()
+    deployment = listening_profile(profile(),input_mode)
+    experimental = (listening_client or ListeningClient(os.environ.get('LIVE_LISTENING_URL','http://127.0.0.1:18095'))) if input_mode == EXPERIMENT else None
     public = Path(__file__).resolve().parent.parent / "frontend"
     services = providers or LocalProviders(SpeechRecognition(os.environ.get("LIVE_STT_MODEL_DIR"),
                                                            os.environ.get("LIVE_STT_DEVICE", "cpu")),
@@ -90,7 +95,16 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         if task and not task.done(): task.cancel()
         downloads.clear()
         await services.close()
+        if experimental is not None: await experimental.close()
         if owns_archive_store: await asyncio.to_thread(archive_store.close)
+
+    async def service_health():
+        health = await services.health()
+        if experimental is not None:
+            listening_health = await experimental.health()
+            health = {**health,'streaming_asr':bool(listening_health.get('ready') and listening_health.get('asr')),
+                      'turn_detector':bool(listening_health.get('ready') and listening_health.get('turn'))}
+        return health
 
     app = FastAPI(title="Character Studio · Live voice", lifespan=lifespan)
 
@@ -261,9 +275,13 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
 
     @app.get("/api/status")
     async def status():
-        health = {"stt":False,"llm":False,"tts":False} if preview else await services.health()
+        health = {"stt":False,"llm":False,"tts":False} if preview else await service_health()
         return {"preview":preview,"ready":all(health.values()),"services":health,
                 "voice_pipeline":"responsive-context-v4",
+                "listening":{"mode":input_mode,'experimental':experimental is not None,
+                             'input_asr':'Nemotron streaming 0.6B' if experimental is not None else 'Faster-Whisper base.en',
+                             'turn_detector':'Smart Turn 3.2' if experimental is not None else 'VAD pause',
+                             'chunk_ms':560 if experimental is not None else None},
                 "model_inspection":True,
                 "inspection_download":True,
                 "character_presets":True,
@@ -323,6 +341,8 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         await call_lock.acquire()
         session = None
         archive_search = None
+        listener = None
+        listening_sequence = 0
         send_lock = asyncio.Lock()
         async def send_json(value):
             async with send_lock: await socket.send_json(value)
@@ -330,9 +350,12 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             async with send_lock: await socket.send_bytes(value)
         try:
             await socket.accept()
-            health = await services.health()
+            health = await service_health()
             if not all(health.values()):
-                await send_json({"type":"error", "message":"Start speech recognition, the text model and Drama 3 first."}); return
+                message = ('Experimental listening is not ready. Check the listening service log and local checkpoints.'
+                           if experimental is not None and not (health.get('streaming_asr') and health.get('turn_detector'))
+                           else 'Start speech recognition, the text model and Drama 3 first.')
+                await send_json({"type":"error", "message":message}); return
             initial = await asyncio.wait_for(socket.receive_text(), timeout=15)
             if len(initial.encode("utf-8")) > MAX_START_BYTES: raise ValueError("Voice reference is too large.")
             config = json.loads(initial)
@@ -366,11 +389,38 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                                   narrative=narrative, archive=archive if archive.enabled else None, archive_entries=archive_entries,
                                   archive_search=archive_search)
             listen_after = 0.0
-            def clear_microphone():
+            async def clear_microphone():
+                nonlocal listening_sequence
                 detector.pending.clear(); detector.reset()
+                if listener is not None:
+                    was_active = listener.input_active
+                    await listener.reset()
+                    if was_active:
+                        listening_sequence += 1
+                        await send_json({'type':'listening_state','phase':'idle','input_id':listening_sequence})
                 session.input_active = False
+            if experimental is not None:
+                async def input_started():
+                    nonlocal listening_sequence
+                    listening_sequence += 1
+                    session.input_active = True
+                    await send_json({'type':'speech_start'})
+                    await send_json({'type':'listening_state','phase':'listening','input_id':listening_sequence})
+                async def input_partial(text):
+                    await send_json({'type':'listening_partial','text':text,'input_id':listening_sequence})
+                async def input_endpoint(endpoint_ms, metrics):
+                    await send_json({'type':'listening_state','phase':'finalizing','input_id':listening_sequence})
+                async def input_final(pcm, text, endpoint_ms, metrics):
+                    await session.begin(text=text,endpoint_ms=endpoint_ms,recognition_metrics=metrics)
+                async def input_error(message):
+                    session.input_active = False
+                    await send_json({'type':'listening_state','phase':'error','input_id':listening_sequence,'message':message})
+                listener = ListeningSession(experimental,detector.is_speech,on_start=input_started,
+                    on_partial=input_partial,on_endpoint=input_endpoint,on_final=input_final,on_error=input_error)
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
-                             "endpoint_ms":detector.silence_frames * 20, "turn_taking":"Stop reply to interrupt; mic resumes after playback",
+                             "endpoint_ms":300 if experimental is not None else detector.silence_frames * 20,
+                             "turn_taking":"Stop reply to interrupt; mic resumes after playback",
+                             "listening_mode":input_mode,
                              "voice":"uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated reply anchors this call"})
             await session.start_story()
             while True:
@@ -382,7 +432,11 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                     # Speech detection alone cannot distinguish a person from speaker echo or noise.
                     # Discard input while generating AND playing; do not buffer it for the next turn.
                     if session.reply_pending or time.monotonic() < listen_after:
-                        clear_microphone()
+                        await clear_microphone()
+                        continue
+                    if listener is not None:
+                        await listener.feed(packet)
+                        session.input_active = listener.input_active
                         continue
                     for event, pcm, endpoint_ms in detector.feed(packet):
                         if event == "start":
@@ -392,7 +446,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                             session.prepare_recognition(pcm)
                         elif event == "utterance":
                             await session.begin(pcm=pcm, endpoint_ms=endpoint_ms)
-                            clear_microphone()
+                            await clear_microphone()
                             break
                         elif event == "noise":
                             session.input_active = False
@@ -418,16 +472,17 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                         turn = command.get("turn_id")
                         if type(turn) is not int: raise ValueError("Invalid playback completion.")
                         if session.playback_done(turn):
-                            clear_microphone()
+                            await clear_microphone()
                             # Allow loudspeaker audio to decay before accepting another utterance.
                             listen_after = time.monotonic() + 0.35
                             await session.story_boundary()
                     elif command.get("type") == "text":
                         text = command.get("text","")
                         if not isinstance(text,str) or not 0 < len(text.strip()) <= 2000: raise ValueError("Enter a short message.")
+                        if listener is not None: await clear_microphone()
                         await session.begin(text=text.strip())
                     elif command.get("type") == "mute":
-                        clear_microphone()
+                        await clear_microphone()
                         # Muting capture must not cancel a finalized turn's ASR.
                         if not session.reply_pending: await session.prepared_recognition.clear()
                     elif command.get("type") == "delivery":
@@ -438,20 +493,24 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                         await send_json({"type":"director_ack","message":"Direction saved for the next reply."})
                     elif command.get("type") == "story":
                         control=StoryControl.model_validate(command.get("control"))
+                        if listener is not None and control.action == 'cue': await clear_microphone()
                         await session.story_control(control.action)
                     elif command.get("type") == "trigger":
-                        clear_microphone()
+                        await clear_microphone()
                         await session.fire_trigger()
                     elif command.get("type") == "clear_trigger":
                         await session.trigger_state(False)
                     elif command.get("type") == "interrupt":
                         await session.interrupt()
                         await session.prepared_recognition.clear()
-                        clear_microphone()
+                        await clear_microphone()
                         listen_after = time.monotonic() + 0.35
                     elif command.get("type") == "stop": break
         except (WebSocketDisconnect, asyncio.TimeoutError):
             pass
+        except ListeningError:
+            try: await send_json({'type':'error','message':'The microphone could not be processed. Reconnect the call and try again.'})
+            except RuntimeError: pass
         except ValidationError as exc:
             reason = exc.errors(include_input=False)[0]["msg"]
             try: await send_json({"type":"error", "message":"Check the call settings: " + reason})
@@ -460,11 +519,19 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             try: await send_json({"type":"error", "message":"Check the character fields and reconnect."})
             except RuntimeError: pass
         finally:
-            if session: await session.close()
-            elif archive_search is not None: await asyncio.to_thread(archive_search.close)
-            call_lock.release()
-            try: await socket.close()
-            except RuntimeError: pass
+            # ASGI disconnect cancellation must not abandon the recognition
+            # worker or leave the single-call lock held for the next visitor.
+            with CancelScope(shield=True):
+                try:
+                    try:
+                        if listener is not None: await listener.close()
+                    finally:
+                        if session: await session.close()
+                        elif archive_search is not None: await asyncio.to_thread(archive_search.close)
+                finally:
+                    call_lock.release()
+                    try: await socket.close()
+                    except RuntimeError: pass
 
     app.mount("/static",StaticFiles(directory=public),name="static")
     return app

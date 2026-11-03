@@ -30,4 +30,4 @@ if [[ "${LIVE_VERIFY_VOICE:-1}" == '0' ]]; then
 else
   echo 'Spoken-word verification: enabled'
 fi
-exec srun --ntasks=1 bash scripts/run_live_stack.sh --profile quality-3gpu
+exec srun --ntasks=1 bash scripts/run_live_stack.sh --profile quality-3gpu "$@"

@@ -6,11 +6,12 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from live_voice.deployment import ROOT, assigned_devices, model_command, profile
+from live_voice.listening_config import listening_profile
 
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('role',choices=['actor','director']);args=parser.parse_args()
-    config=profile()
+    config=listening_profile(profile())
     try:
         devices=assigned_devices(config,os.environ.get('CUDA_VISIBLE_DEVICES',''))
         command=model_command(config,args.role,os.environ['LIVE_VOICE_STORE'],ROOT/'.venv-drama3/bin/vllm')

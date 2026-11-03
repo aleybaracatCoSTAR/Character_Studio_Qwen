@@ -1,5 +1,7 @@
 # Live microphone + character + Drama 3
 
+**3 November: optional faster-listening trial.** [Try Nemotron GPU streaming recognition + Smart Turn v3.2](LISTENING_EXPERIMENT.md) with the existing three-GPU profile. It has a separate environment, temporary live transcript and explicit comparison/rollback commands. The default baseline and whole-reply emotional delivery remain available. Actual Surrey timing and GPU fit still need testing.
+
 This experimental mode connects **English speech recognition → director → Qwen3-4B-Instruct-2507 actor → Drama 3**. Start a call once, speak, pause, and hear one continuous voice take for each reply. The microphone waits while the character generates and plays a reply. Use **Stop reply** to take over. The original Qwen3-Omni 30B recorded-turn mode remains available separately.
 
 **Status, 27 October 2026:** the current code adds earlier recognition preparation and bounded conversation recall to the [director orchestrator](DIRECTOR.md). CPU tests cover final-audio matching, cancellation, heard-history retrieval and transport. No live-model check was performed for this update, so there is no measured H200 speed improvement or new listening-quality result. The complete-reply TTS validation and one-emotion-per-reply policy remain unchanged. This is a cascaded voice system: recognition finalises each utterance after a pause.

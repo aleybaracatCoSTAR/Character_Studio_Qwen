@@ -2,6 +2,8 @@
 
 A small rehearsal space for creating a character and talking to it using **Qwen3-Omni-30B-A3B-Instruct**. Edit the character on the left, then type or record a question on the right. Anna, an underappreciated washing machine in a wealthy household, is the included fictional example.
 
+**New optional listening experiment:** [Try Nemotron GPU streaming ASR + Smart Turn v3.2](docs/LISTENING_EXPERIMENT.md), following Mark Boas's suggestions. It transcribes during speech and judges candidate pauses, with a temporary live transcript. A separate environment preserves the working voice dependencies. The three-GPU launcher shares the director GPU and accepts `--listening nemotron-smart-turn`; `baseline` remains the default. The director and complete one-emotion voice validation stay in place for this first comparison. CPU/protocol checks do not establish GPU fit or a latency improvement; the guide includes Surrey install/start and comparison commands.
+
 **Live voice experiment added:** [Follow the live setup guide](docs/LIVE_SETUP.md) for continuous microphone input, automatic pause detection, interruption and streamed Drama 3 speech. That mode uses English Faster-Whisper + a small Qwen3-4B text model + Drama 3, separately from the original Qwen-Omni 30B baseline described below. [View the live UI preview](docs/screenshots/live-preview.jpg).
 
 **The live mode now includes [narrative beats and performer controls](docs/NARRATIVE.md), plus [two-/three-GPU quality profiles](docs/MULTI_GPU.md).** The [director orchestrator](docs/DIRECTOR.md) works as follows: a backstage LLM plans each reply’s intention and vocal delivery, Qwen acts the character, and Drama 3 speaks. The director defaults to a separate call to the existing Qwen server; a different running LLM endpoint can be configured. The sidebar includes Female/Male reference voices, custom WAV upload, vocal emotion and an editable emotional trigger. Anna's example is **Press reset → Anxious → fear of losing memories**. The microphone waits during replies; use **Stop reply** to take over. [Preview the trigger editor](docs/screenshots/contextual-reaction-preview.jpg). Triggers now use a local-model contextual decision rather than exact wording. Vocal direction is fixed for a complete reply, synthesized as one continuous take without a natural-delivery fallback; the new director and audible performance still need a live listening test. The earlier trigger-only check scored 11/12 on its small diagnostic set; see [verification](docs/DIRECTOR.md#verification).
@@ -72,6 +74,7 @@ Follow **[the Surrey guide](docs/SURREY.md)**. The starting target is one alloca
 | `characters/anna.json` | Example character |
 | `live_voice/` | Continuous-mic app, turn detection, local providers and interruption |
 | `live_voice/recognition.py`, `live_voice/turns.py` | Safe recognition preparation and bounded active-call conversation memory |
+| `live_voice/listening.py`, `listening_runtime/` | Optional streaming recognition and Smart Turn service in its own environment |
 | `frontend/live.*`, `frontend/live-audio.mjs` | Live call page, controls and streamed PCM playback |
 | `scripts/run_live_stack.sh` | Start the live app and both model servers |
 | `scripts/` | Environment setup, model download and launch |
@@ -95,7 +98,7 @@ node --test tests/*.test.mjs
 for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
 ```
 
-495 Python tests cover scalable archive import/indexing, literal official-export text, safe stage/error diagnostics, legacy migration, frozen retrieval, pagination/selection, upload cancellation and source scopes, plus the guarded sampling repair, background batch entrypoint, strict token-limit recovery and tail analysis, spoken coverage and safe diagnostics, character presets, model-input exports, beat-entry replies, protected turn-taking, active-call memory, whole-reply delivery, cancellation and owned worker shutdown. Unchanged JavaScript has 124 passing tests. Inference uses explicit test doubles; shutdown checks use real temporary CPU processes and sockets. Separate browser and complete-corpus import/deduplication checks used the public snapshot without calling speech models. These do not demonstrate model quality or real GPU speed.
+568 Python tests cover streaming listening and Smart Turn, real loopback protocol, interim/final transcript separation, cancellation and baseline compatibility, isolated setup/download manifests, GPU launch/configuration, scalable archive import/indexing, guarded sampling repair, spoken coverage, character presets, model-input exports, beat replies and whole-reply delivery. 130 JavaScript tests cover the live controls and temporary listening feedback. Inference uses explicit test doubles; transport and shutdown checks use real temporary CPU processes and sockets. Separate browser and complete-corpus import/deduplication checks used the public snapshot without calling speech models. These do not demonstrate model quality or real GPU speed.
 
 ## Model and implementation sources
 

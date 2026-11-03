@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import struct
 import time
 
@@ -15,6 +16,23 @@ from .voice import Delivery, VoiceSettings, spoken_input
 from .archive import retrieve, grounding_messages
 
 logger = logging.getLogger(__name__)
+
+
+def recognition_timings(values):
+    """Only bounded listening counters can enter reply metrics."""
+    if values is None: return {}
+    if not isinstance(values,dict): raise ValueError('Use listening timing counters.')
+    result = {'streaming_asr':True}
+    for key,maximum in (('stream_finalize_ms',30000),('turn_inference_ms',10000)):
+        value = values.get(key)
+        if type(value) is int and 0 <= value <= maximum: result[key] = value
+    reason = values.get('endpoint_reason')
+    if reason in ('smart_turn','pause_limit','max_duration','endpoint_timeout'):
+        result['endpoint_reason'] = reason
+    probability = values.get('turn_probability')
+    if type(probability) in (int,float) and math.isfinite(probability) and 0 <= probability <= 1:
+        result['turn_probability'] = probability
+    return result
 
 
 class LiveSession:
@@ -201,7 +219,7 @@ class LiveSession:
         self.history.current = None
         return True
 
-    async def begin(self, pcm=None, text=None, endpoint_ms=0, action=False, expected_revision=None):
+    async def begin(self, pcm=None, text=None, endpoint_ms=0, action=False, expected_revision=None, recognition_metrics=None):
         async with self.begin_lock:
             if self.closed: return False
             if expected_revision is not None:
@@ -209,7 +227,9 @@ class LiveSession:
                         or self.reply_pending or self.input_active or self.story.finished): return False
                 # Reserve the revision before awaiting cancellation or transport.
                 self.pending_beat_reply = None
-            return await self._begin(pcm, text, endpoint_ms, action, expected_revision)
+            if recognition_metrics is None:
+                return await self._begin(pcm, text, endpoint_ms, action, expected_revision)
+            return await self._begin(pcm, text, endpoint_ms, action, expected_revision, recognition_metrics)
 
     def entry_is_current(self, revision):
         valid = not self.closed and (revision is None or (
@@ -221,7 +241,8 @@ class LiveSession:
             self.pending_beat_reply = revision
         return valid
 
-    async def _begin(self, pcm, text, endpoint_ms, action, expected_revision):
+    async def _begin(self, pcm, text, endpoint_ms, action, expected_revision, recognition_metrics=None):
+        listening = recognition_timings(recognition_metrics)
         if (self.story_director_task and self.story_director_task is not asyncio.current_task()
                 and not self.story_director_task.done()):
             self.story_director_task.cancel();await asyncio.gather(self.story_director_task,return_exceptions=True)
@@ -241,8 +262,9 @@ class LiveSession:
         self.generation_complete = False
         self.turn_action = action
         self.turn_story_revision = self.story.revision
-        self.started = time.perf_counter() - endpoint_ms / 1000
-        self.task = asyncio.create_task(self.run(turn_id, pcm, text, endpoint_ms, action))
+        self.started = time.perf_counter() - (endpoint_ms + listening.get('stream_finalize_ms',0)) / 1000
+        self.task = asyncio.create_task(self.run(turn_id, pcm, text, endpoint_ms, action,
+                                               **({'recognition_metrics':listening} if listening else {})))
         return True
 
     def prepare_recognition(self, pcm):
@@ -250,20 +272,21 @@ class LiveSession:
         if self.reply_pending: return False
         return self.prepared_recognition.prepare(pcm)
 
-    async def run(self, turn_id, pcm, text, endpoint_ms, action=False):
+    async def run(self, turn_id, pcm, text, endpoint_ms, action=False, recognition_metrics=None):
         with self.inspection.scope(turn_id):
-            await self.run_turn(turn_id, pcm, text, endpoint_ms, action)
+            await self.run_turn(turn_id, pcm, text, endpoint_ms, action,
+                                **({'recognition_metrics':recognition_metrics} if recognition_metrics else {}))
 
-    async def run_turn(self, turn_id, pcm, text, endpoint_ms, action=False):
+    async def run_turn(self, turn_id, pcm, text, endpoint_ms, action=False, recognition_metrics=None):
         started = self.started
-        metrics = {"endpoint_ms":endpoint_ms}
+        metrics = {"endpoint_ms":endpoint_ms,**recognition_timings(recognition_metrics)}
         try:
             await self.send_json({"type":"turn_start", "turn_id":turn_id})
             now = time.perf_counter()
             if text is None:
                 text = await self.prepared_recognition.transcribe(pcm)
                 metrics["recognition_prepared"] = self.prepared_recognition.last_reused
-            metrics["stt_ms"] = round((time.perf_counter() - now) * 1000)
+            metrics["stt_ms"] = metrics.get('stream_finalize_ms',round((time.perf_counter() - now) * 1000))
             if not text or not text.strip():
                 self.reply_pending = False
                 await self.send_json({"type":"empty_transcript", "turn_id":turn_id}); return

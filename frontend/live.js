@@ -7,6 +7,7 @@ import {DirectorPanel} from './live-director-panel.mjs';
 import {CallFeedback} from './live-feedback.mjs';
 import {CharacterLibrary} from './live-characters.mjs';
 import {ArchivePanel} from './live-archive.mjs';
+import {ListeningFeedback} from './live-listening.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const archivePage=location.pathname.startsWith('/archive');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
@@ -21,6 +22,10 @@ const conversation=new Conversation($('messages'),$('empty-state'));
 const callFeedback=new CallFeedback($('feedback'));
 const inspector=new PromptInspector({document,send});
 const archivePanel=new ArchivePanel({document,onChange:()=>saveActiveProfile()});
+const listeningFeedback=new ListeningFeedback({label:$('listening-mode'),partial:$('listening-partial'),
+  onFinalizing:()=>{holdMicrophone();state('Finishing recognition… · Mic paused');},
+  onListening:()=>{if(replyPending)resumeMicrophone();else state('Listening…');},
+  onError:message=>{feedback(message);resumeMicrophone();}});
 const directorPanel=new DirectorPanel({button:$('toggle-director'),content:$('director-content'),
   summary:$('director-summary'),empty:$('director-empty')});
 const voiceRetry=new VoiceRetry({button:$('retry-voice'),send,
@@ -175,6 +180,7 @@ async function disconnect(){
   socket=null;context=null;stream=null;capture=null;playback=null;connecting=true;
   inspector.setConnected(false);
   archivePanel.resetSources();
+  listeningFeedback.reset();
   voiceRetry.clear();
   callFeedback.clearVoiceNotice();
   clearTimeout(resumeTimer);replyPending=false;sessionReady=false;triggerActive=false;controls();
@@ -188,6 +194,7 @@ async function disconnect(){
   return disconnecting;
 }
 function event(data){
+  if(data.type==='listening_state'||data.type==='listening_partial'){listeningFeedback.accept(data);return;}
   if(data.type==='model_inspection'){inspector.accept(data);return;}
   if(data.type==='archive_sources'){archivePanel.showSources(data);return;}
   if(data.type==='story_state'){renderStory(data);return;}
@@ -206,10 +213,10 @@ function event(data){
     else if(data.action==='hold')$('trigger-state').textContent=(triggerActive?'Reaction continues':'Normal state')+(data.evidence?` · ${data.evidence}`:'');
     state('Thinking… · Mic paused');return;
   }
-  if(data.type==='ready'){sessionReady=true;inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
+  if(data.type==='ready'){listeningFeedback.setMode(data.listening_mode);sessionReady=true;inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
-  if(data.type==='turn_start'){callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
+  if(data.type==='turn_start'){listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
   if(data.type==='interrupted'){
     if(data.turn_id===currentTurn){voiceRetry.clear();playback.clear();resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
     return;
@@ -234,7 +241,7 @@ function event(data){
     }
     playback.responseDone();
   }
-  if(data.type==='metrics')$('timing').textContent=`Server estimate to first audio: ${data.speech_end_to_first_audio_ms} ms · Final pause: ${data.endpoint_ms} ms · Recognition wait: ${data.stt_ms} ms${data.recognition_prepared?' (started during pause)':''} · Director: ${data.director_ms??data.context_check_ms??0} ms · Reply text: ${data.llm_total_ms??data.llm_first_token_ms} ms · Complete voice take: ${data.tts_first_chunk_ms} ms`;
+  if(data.type==='metrics')$('timing').textContent=`Server estimate to first audio: ${data.speech_end_to_first_audio_ms} ms · Final pause: ${data.endpoint_ms} ms · Recognition wait: ${data.stt_ms} ms${data.streaming_asr?' (Nemotron streaming)':data.recognition_prepared?' (started during pause)':''}${data.endpoint_reason?' · Endpoint: '+data.endpoint_reason:''} · Director: ${data.director_ms??data.context_check_ms??0} ms · Reply text: ${data.llm_total_ms??data.llm_first_token_ms} ms · Complete voice take: ${data.tts_first_chunk_ms} ms`;
 }
 async function connect(useMic=true){
   if(connecting)return;if(socket){await disconnect();return;}if(!form.reportValidity())return;
@@ -245,7 +252,7 @@ async function connect(useMic=true){
   }
   connecting=true;feedback();controls();
   try{
-    conversation.reset();inspector.reset();archivePanel.resetSources();voiceRetry.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
+    conversation.reset();inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}
@@ -335,6 +342,7 @@ for(const id of ['director-enabled','director-input'])$(id).addEventListener('ch
 async function status(){
   try{
     const response=await fetch('/api/status'),data=await response.json();ready=data.ready;inspector.setSupported(data.model_inspection===true);
+    listeningFeedback.setMode(data.listening?.mode);
     $('status').textContent=data.preview?'Design preview':ready?'Voice services ready':'Services starting…';$('status').className=ready?'ready':'';
     $('mode-note').textContent=data.preview?'Design preview. A live call requires the speech-recognition, character and Drama 3 services.':ready?'Speak and pause to hear a reply. Your mic waits until the answer finishes. Use Stop reply to take over.':data.stt_error||Object.entries(data.services).map(([name,ok])=>`${name.toUpperCase()}: ${ok?'ready':'not ready'}`).join(' · ');
     if(data.busy&&!socket){ready=false;$('mode-note').textContent='Another voice session is active. End that call before starting a new one.';}

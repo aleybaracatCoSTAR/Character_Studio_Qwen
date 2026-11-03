@@ -1,5 +1,7 @@
 # Multi-GPU quality profiles
 
+**Optional listening experiment:** [Nemotron + Smart Turn setup](LISTENING_EXPERIMENT.md) adds GPU streaming input recognition to `quality-3gpu`. Pass `--listening nemotron-smart-turn` to the interactive launcher or batch script. Nemotron shares the third allocated GPU with a director budget of 75%; Smart Turn runs on CPU. The baseline budgets below remain unchanged when that option is absent. This does not request a fourth GPU.
+
 The live app can run its narrative director and character actor on larger models, with Drama 3 on its own GPU. These are **single-node H200 profiles**. Additional devices make space for those models; they do not change the knowledge or acting skill of an unchanged checkpoint. Quality and latency need rehearsal comparisons.
 
 | Profile | Allocated H200s | Actor | Director | Placement |
@@ -86,6 +88,7 @@ Only port 18091 needs forwarding. On Surrey:
 | 18092 | Actor text API |
 | 18093 | Drama 3 TTS |
 | 18094 | Separate director API, three-GPU profile only |
+| 18095 | Optional isolated Nemotron/Smart Turn service; no browser tunnel needed |
 
 **Director script** displays the configured profile and model IDs. The page's ready check includes the separate director server when configured. `shared` and the two-GPU profile use separate requests on one text server; the three-GPU profile has two separate model processes on different GPUs.
 

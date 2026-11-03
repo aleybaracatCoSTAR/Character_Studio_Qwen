@@ -1,6 +1,7 @@
 .venv/
 .venv-drama3/
 .venv-live/
+.venv-listening/
 __pycache__/
 *.py[cod]
 .env
