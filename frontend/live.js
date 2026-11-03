@@ -17,7 +17,7 @@ let referenceURL=null;
 let triggerActive=false;
 let sessionReady=false,disconnecting=null;
 let characterLibrary=null,profileStorage=null,loadingProfile=false;
-let libraryHint='Each character keeps its own settings. End the call before switching.';
+let libraryHint='Each character has its own details, voice and story. End the call to create or switch.';
 const conversation=new Conversation($('messages'),$('empty-state'));
 const callFeedback=new CallFeedback($('feedback'));
 const inspector=new PromptInspector({document,send});
@@ -123,7 +123,7 @@ async function loadCharacterLibrary(){
   try{
     const response=await fetch('/api/characters/presets');if(!response.ok)throw new Error('Presets unavailable.');
     const data=await response.json();if(!Array.isArray(data))throw new Error('Presets unavailable.');presets=data;
-  }catch(error){libraryHint='Your saved character is available. Update and restart the studio server to add KADEN.';}
+  }catch(error){libraryHint='Your saved characters are available. Built-in examples could not be loaded.';}
   try{profileStorage=localStorage;}catch(error){}
   let savedArchive=false;
   if(archivePage){try{savedArchive=!!profileStorage?.getItem('live-archive-character-library-v1');}catch(error){}}
@@ -161,6 +161,7 @@ function resumeMicrophone(){
 function controls(){
   const connected=socket?.readyState===WebSocket.OPEN;
   $('character-picker').disabled=!!connected||connecting||!characterLibrary;
+  $('new-character').disabled=!!socket||connecting||!!disconnecting||!characterLibrary;
   $('start-call').disabled=connecting||(!connected&&!ready);$('start-call').classList.toggle('connected',!!connected);
   $('start-call').querySelector('span').textContent=connected?'End session':connecting?'Connecting…':'Start call';
   $('mute').hidden=!connected||!stream;$('interrupt').hidden=!connected;
@@ -295,6 +296,33 @@ $('character-picker').addEventListener('change',()=>{
   if(connecting||socket){characterOptions();return;}
   const selected=characterLibrary.switchTo($('character-picker').value,capturedProfile());
   if(selected)applyProfile(selected);
+});
+$('new-character').addEventListener('click',()=>{
+  if(!characterLibrary||connecting||socket||disconnecting)return;
+  $('new-character-form').reset();$('new-character-error').textContent='';
+  $('new-character-dialog').showModal();
+});
+$('cancel-new-character').addEventListener('click',()=>$('new-character-dialog').close());
+$('new-character-form').addEventListener('input',()=>{$('new-character-error').textContent='';});
+$('new-character-form').addEventListener('submit',event=>{
+  event.preventDefault();
+  if(!characterLibrary||connecting||socket||disconnecting){
+    $('new-character-error').textContent='End the current call before creating a character.';return;
+  }
+  const name=$('new-character-name').value.trim(),role=$('new-character-role').value.trim();
+  if(!name||name.length>80||role.length>120){
+    $('new-character-error').textContent=!name?'Give your character a name.':'Use a name up to 80 characters and a description up to 120 characters.';return;
+  }
+  let profile;
+  try{
+    saveActiveProfile();
+    profile=characterLibrary.create({name,role,archiveEnabled:archivePage});
+  }catch(error){
+    $('new-character-error').textContent='Could not create the character. Try again in this browser.';return;
+  }
+  applyProfile(profile);$('new-character-dialog').close();
+  form.hidden=false;$('toggle-profile').textContent='Hide details';$('toggle-profile').setAttribute('aria-expanded','true');
+  form.elements.about.focus();
 });
 for(const id of ['voice-emotion','voice-event','voice-direction'])$(id).addEventListener('change',()=>{
   const settings=delivery();send({type:'delivery',settings});

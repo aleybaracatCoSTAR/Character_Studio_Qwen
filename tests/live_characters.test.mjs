@@ -195,3 +195,95 @@ test('normal legacy compatibility writes only sanitized active settings after th
   assert.deepEqual(JSON.parse(saved.getItem('live-story-v1')),kaden().narrative);
   assert.equal(JSON.parse(saved.getItem(CHARACTER_LIBRARY_KEY)).profiles[0].character.name,'Karim');
 });
+
+test('creating a character starts a clean independent profile and preserves the saved current character and presets',()=>{
+  const saved=storage(),library=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()]});
+  const previous=library.active();previous.character.memories='An edit saved immediately before creation.';library.save(previous);
+  const authoredPreset=library.preset('kaden'),created=library.create({name:'  Noor  ',role:'  Night-shift archivist  '});
+  assert.match(created.id,/^character-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+  assert.equal(library.activeId,created.id);assert.equal(created.character.name,'Noor');assert.equal(created.character.role,'Night-shift archivist');
+  assert.deepEqual(created.character,{name:'Noor',role:'Night-shift archivist',about:'',goal:'',environment:'',voice_style:'',rules:'',memories:'',beat:'',speaker:'Chelsie'});
+  assert.deepEqual(created.voice,{preset:'automatic',emotion:'neutral',event:'none',direction:''});
+  assert.deepEqual(created.director,{enabled:true,notes:''});assert.equal(created.trigger,null);
+  assert.deepEqual(created.narrative,{enabled:false,mode:'manual',beats:[]});assert.deepEqual(created.archive,{enabled:false,entry_ids:[]});
+  assert.equal(library.preset(),null);assert.deepEqual(library.preset('kaden'),authoredPreset);
+  assert.deepEqual(library.switchTo('local-character'),previous);assert.equal(library.list().length,3);
+});
+
+test('characters with the same name have unique IDs and the newly active character survives reload',()=>{
+  const saved=storage(),library=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()]});
+  const first=library.create({name:'Robin'}),second=library.create({name:'Robin'});
+  assert.notEqual(first.id,second.id);assert.equal(library.list().length,4);
+  const restored=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()]});
+  assert.equal(restored.activeId,second.id);assert.deepEqual(restored.active(),second);
+  assert.deepEqual(restored.switchTo(first.id),first);assert.equal(restored.switchTo('local-character').character.name,'Karim');
+});
+
+test('creating a later character cannot inherit edited voice, biography, director, story or archive fields',()=>{
+  const saved=storage(),library=new CharacterLibrary({storage:saved,current:current()});
+  const first=library.create({name:'First',archiveEnabled:true});
+  first.character.about='Authored first biography.';first.character.environment='A specific room.';first.character.speaker='Ethan';
+  first.voice={preset:'male',emotion:'angry',event:'sigh',direction:'Speak sharply.'};first.director={enabled:false,notes:'First direction.'};
+  first.trigger=current().trigger;first.narrative=current().narrative;first.archive.entry_ids=['a'.repeat(32)];library.save(first);
+  const second=library.create({name:'Second'});assert.equal(second.character.about,'');assert.equal(second.character.environment,'');assert.equal(second.character.speaker,'Chelsie');
+  assert.deepEqual(second.voice,{preset:'automatic',emotion:'neutral',event:'none',direction:''});
+  assert.deepEqual(second.director,{enabled:true,notes:''});assert.equal(second.trigger,null);assert.deepEqual(second.narrative.beats,[]);
+  assert.deepEqual(second.archive,{enabled:false,entry_ids:[]});
+  const restored=new CharacterLibrary({storage:saved,current:current()});assert.deepEqual(restored.switchTo(first.id),first);
+  second.character.name='Mutated outside';second.archive.entry_ids.push('b'.repeat(32));
+  assert.equal(library.active().character.name,'Second');assert.deepEqual(library.active().archive.entry_ids,[]);
+});
+
+test('archive-enabled creation explicitly consults the library without inheriting selected IDs or source text',()=>{
+  const initial={...current(),archive:{enabled:true,scope:'library',entry_ids:['a'.repeat(32)],text:'Do not inherit source material.'}};
+  const library=new CharacterLibrary({storage:storage(),current:initial});
+  const created=library.create({name:'Map visitor',archiveEnabled:true});
+  assert.deepEqual(created.archive,{enabled:true,scope:'library',entry_ids:[]});
+  assert.equal(JSON.stringify(created).includes('Do not inherit'),false);
+  assert.deepEqual(library.create({name:'Ordinary character',archiveEnabled:'true'}).archive,{enabled:false,entry_ids:[]});
+});
+
+test('invalid names or roles do not mutate the list, active ID, settings or saved library',()=>{
+  const saved=storage(),library=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()]});
+  const before=library.active(),items=library.list(),serialized=saved.getItem(CHARACTER_LIBRARY_KEY);
+  for(const name of [undefined,null,0,[],{},'','   ','x'.repeat(81)]){
+    assert.throws(()=>library.create({name}),/character name/);
+    assert.deepEqual(library.active(),before);assert.deepEqual(library.list(),items);assert.equal(saved.getItem(CHARACTER_LIBRARY_KEY),serialized);
+  }
+  for(const role of [null,7,{},'x'.repeat(121)])assert.throws(()=>library.create({name:'Valid name',role}),/character role/);
+  assert.throws(()=>library.create(),/character name/);assert.deepEqual(library.active(),before);assert.equal(saved.getItem(CHARACTER_LIBRARY_KEY),serialized);
+  const boundary=library.create({name:'x'.repeat(80),role:'r'.repeat(120)});
+  assert.equal(boundary.character.name.length,80);assert.equal(boundary.character.role.length,120);
+});
+
+test('UUID collisions never overwrite an existing character and exhausted generation leaves the library intact',t=>{
+  const firstId='11111111-1111-4111-8111-111111111111',secondId='22222222-2222-4222-8222-222222222222';
+  const values=[firstId,firstId,secondId];const generator=t.mock.method(globalThis.crypto,'randomUUID',()=>values.shift()??firstId);
+  const saved=storage(),library=new CharacterLibrary({storage:saved,current:current()});
+  const first=library.create({name:'First'}),second=library.create({name:'Second'});
+  assert.notEqual(first.id,second.id);assert.equal(generator.mock.callCount(),3);
+  const snapshot=saved.getItem(CHARACTER_LIBRARY_KEY),before=library.active();
+  assert.throws(()=>library.create({name:'Never overwrite first'}),/could not create/);
+  assert.deepEqual(library.active(),before);assert.equal(saved.getItem(CHARACTER_LIBRARY_KEY),snapshot);
+  assert.deepEqual(library.switchTo(first.id),first);assert.equal(library.list().length,3);
+});
+
+test('unavailable or malformed secure IDs fail before mutation and do not expose internal failures',t=>{
+  const saved=storage(),library=new CharacterLibrary({storage:saved,current:current()});
+  const before=library.active(),serialized=saved.getItem(CHARACTER_LIBRARY_KEY);
+  const generator=t.mock.method(globalThis.crypto,'randomUUID',()=>{throw new Error('PRIVATE_BROWSER_DETAIL');});
+  assert.throws(()=>library.create({name:'Valid'}),error=>/could not create/.test(error.message)&&!error.message.includes('PRIVATE'));
+  generator.mock.mockImplementation(()=> '../unsafe');assert.throws(()=>library.create({name:'Valid'}),/could not create/);
+  assert.deepEqual(library.active(),before);assert.equal(saved.getItem(CHARACTER_LIBRARY_KEY),serialized);
+});
+
+test('creation stays usable in memory during quota failure while preserving the surviving legacy character',()=>{
+  const saved=storage(),library=new CharacterLibrary({storage:saved,current:current(),presets:[kaden()]});
+  library.writeLegacy();const legacy=saved.getItem('live-character-v1'),originalLibrary=saved.getItem(CHARACTER_LIBRARY_KEY);
+  const setItem=saved.setItem;saved.setItem=(key,value)=>{if(key===CHARACTER_LIBRARY_KEY)throw new Error('Quota.');setItem(key,value);};
+  const created=library.create({name:'In-memory draft'});
+  assert.equal(library.storageError,true);assert.equal(library.activeId,created.id);assert.equal(library.writeLegacy(),false);
+  assert.equal(saved.getItem('live-character-v1'),legacy);assert.equal(saved.getItem(CHARACTER_LIBRARY_KEY),originalLibrary);
+  assert.equal(library.switchTo('local-character').character.about,current().character.about);
+  assert.deepEqual(library.switchTo(created.id),created);
+});

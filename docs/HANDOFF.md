@@ -1,4 +1,12 @@
-# Latest change: optional streaming listening experiment, 3 November 2026
+# Latest change: create additional live characters, 3 November 2026
+
+The live and archive pages now have **New character** next to the picker. A small modal asks for a required name (1–80 characters after trimming) and optional role (up to 120). `CharacterLibrary.create` generates a unique ID independently of the editable name and persists a fresh active profile. Identity facts, memories, goal, environment, voice direction, director notes, triggers and story beats are not copied from the previous character. A new archive-page character enables whole-library retrieval; a normal live character starts with archive access disabled.
+
+Current form edits are saved before creation. Applying the new profile clears conversation, voice reference, inspector, playback, retry and director state using the existing switching path. Creating is disabled during connecting, an active socket or disconnect cleanup, and the submit handler repeats the guard. Storage failures preserve profiles in memory, show the existing browser-save warning and retain the legacy-copy protection. Profiles are browser-local, not shared server records; custom voice clips must still be selected for a call.
+
+The JavaScript suite passes **138 tests**, including eight new creation cases for fresh defaults, duplicate names/unique IDs, persisted reload, independent settings/archive scope, validation, UUID failure/collisions and storage quotas. Browser checks created Iris, edited her facts and goal, switched to Anna and back, refreshed to confirm persistence, and rejected a whitespace-only name. No model dependencies, GPU jobs or backend behavior changed; the previous 568 Python checks remain the backend validation result. Pulling and refreshing the page is sufficient for this static frontend change.
+
+# Previous change: optional streaming listening experiment, 3 November 2026
 
 The portal can now run `--listening nemotron-smart-turn` with `quality-3gpu`. It uses native Transformers 5.13 cache-aware Nemotron RNNT (0.6B English, six lookahead tokens/560 ms chunk) on the director's allocated GPU plus Smart Turn v3.2 CPU ONNX. The experimental director reservation is 75% instead of 85%; baseline configuration is unchanged. Setup, explicit pinned checkpoint download and runtime live in `.venv-listening`, without changing matched Torch/vLLM voice environments. See [LISTENING_EXPERIMENT.md](LISTENING_EXPERIMENT.md) and [exact setup/provenance](../experiments/listening/README.md).
 

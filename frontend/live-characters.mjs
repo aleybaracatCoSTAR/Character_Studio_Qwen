@@ -61,6 +61,31 @@ export class CharacterLibrary {
   list(){return [...this.profiles.values()].map(profile=>({id:profile.id,name:profile.character.name}));}
   active(){return copy(this.profiles.get(this.activeId));}
   preset(id=this.activeId){const profile=this.presets.get(id);return profile?copy(profile):null;}
+  create({name,role='',archiveEnabled=false}={}){
+    if(typeof name!=='string'||!name.trim()||name.trim().length>80)
+      throw new Error('Enter a character name between 1 and 80 characters.');
+    if(typeof role!=='string'||role.trim().length>120)
+      throw new Error('Keep the character role within 120 characters.');
+    let id;
+    // Keep IDs separate from editable names and never replace an existing
+    // profile, even if the browser returns an already-used UUID.
+    for(let attempt=0;attempt<8;attempt++){
+      let uuid;
+      try{uuid=globalThis.crypto?.randomUUID();}catch(error){break;}
+      if(typeof uuid!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(uuid))break;
+      const candidate='character-'+uuid.toLowerCase();
+      if(!this.profiles.has(candidate)){id=candidate;break;}
+    }
+    if(!id)throw new Error('Your browser could not create a character. Refresh this secure tab and try again.');
+    const profile=characterProfile({
+      character:{...strings({},CHARACTER_FIELDS),name:name.trim(),role:role.trim(),speaker:'Chelsie'},
+      voice:{preset:'automatic',emotion:'neutral',event:'none',direction:''},
+      director:{enabled:true,notes:''},trigger:null,
+      narrative:{enabled:false,mode:'manual',beats:[]},
+      archive:{enabled:archiveEnabled===true,...(archiveEnabled===true?{scope:'library'}:{}),entry_ids:[]}
+    },id);
+    this.profiles.set(id,profile);this.activeId=id;this.persist();return this.active();
+  }
   save(value){
     const profile=characterProfile(value,this.activeId);if(!profile)return false;
     this.profiles.set(this.activeId,profile);return this.persist();

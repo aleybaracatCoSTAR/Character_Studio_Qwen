@@ -2,8 +2,8 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Character Studio · Live voice</title><link rel="stylesheet" href="/static/styles.css"><link rel="stylesheet" href="/static/live.css"><script type="module" src="/static/live.js"></script></head>
 <body><header><div class="brand-area"><a class="brand" href="/">Character Studio <span>Live voice</span></a><a class="archive-nav" href="/archive/" aria-label="Open character with archive">Archive</a></div><div id="status" role="status">Checking services…</div></header>
-<main><aside><div class="section-heading"><h1>Your character</h1><button id="toggle-profile" class="quiet" aria-expanded="true">Hide details</button></div><p class="hint">Set their point of view before starting the call.</p>
-<label class="character-picker">Character<select id="character-picker" disabled aria-describedby="character-library-note"><option>Loading your character…</option></select></label>
+<main><aside><div class="section-heading"><h1>Your characters</h1><button id="toggle-profile" class="quiet" aria-expanded="true">Hide details</button></div><p class="hint">Choose a character or create someone new.</p>
+<div class="character-library-row"><label class="character-picker"><span class="sr-only">Your characters</span><select id="character-picker" disabled aria-describedby="character-library-note"><option>Loading your character…</option></select></label><button type="button" id="new-character" class="quiet" aria-haspopup="dialog" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New character</button></div>
 <p id="character-library-note" class="hint small">Your current character will stay selected.</p>
 <form id="character-form">
 <label>Name<input name="name" required maxlength="80"></label><label>Who are they?<input name="role" maxlength="120"></label>
@@ -92,6 +92,16 @@
 <p class="hint small center">Mic waits during replies · Replies play as they arrive · Headphones recommended</p>
 <p class="attribution">Built with Fish Audio · Speech recognition → director → character actor → Drama 3 voice</p></div>
 </section></main>
+<dialog id="new-character-dialog" aria-labelledby="new-character-title" aria-describedby="new-character-description">
+<h2 id="new-character-title">Create a character</h2>
+<p id="new-character-description" class="hint">Start with a name. Add their personality, memories, voice and story afterwards.</p>
+<form id="new-character-form">
+<label for="new-character-name">Name<input id="new-character-name" name="name" required maxlength="80" autocomplete="off" placeholder="What are they called?" autofocus></label>
+<label for="new-character-role">Who are they? <span class="hint small">Optional</span><input id="new-character-role" name="role" maxlength="120" autocomplete="off" placeholder="A job, role or short description"></label>
+<p id="new-character-error" role="alert" class="hint"></p>
+<p class="hint small">Saved in this browser, alongside your other characters.</p>
+<div class="new-character-actions"><button type="button" id="cancel-new-character" class="quiet">Cancel</button><button type="submit" id="create-character" class="primary">Create character</button></div>
+</form></dialog>
 <dialog id="archive-dialog" aria-labelledby="archive-dialog-title" aria-describedby="archive-dialog-description">
 <div class="inspection-heading"><h2 id="archive-dialog-title">Add a story</h2><button type="button" id="archive-close" class="secondary">Close</button></div>
 <p id="archive-dialog-description" class="hint">Import one selected Queering the Map entry, or paste a passage. Adding the homepage does not import the map.</p>
