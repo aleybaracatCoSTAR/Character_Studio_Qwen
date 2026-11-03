@@ -4,21 +4,21 @@ permissions:
   contents: read
 jobs:
   cpu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m unittest discover -s tests -v
-      - run: python -m compileall -q studio live_voice scripts experiments/drama3 tests
+      - run: python -m compileall -q studio live_voice listening_runtime scripts experiments/drama3 tests
       - run: node --check frontend/app.js && node --check frontend/recorder-worklet.js
       - run: node --input-type=module --check < frontend/live.js
       - run: node --check frontend/live-capture-worklet.js && node --check frontend/live-story.mjs
-      - run: node --test tests/live_audio.test.mjs
-      - run: for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
+      - run: node --test tests/*.test.mjs
+      - run: for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch scripts/run_live_slurm.sbatch; do bash -n "$script" || exit; done

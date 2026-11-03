@@ -1,4 +1,10 @@
-# Latest change: create additional live characters, 3 November 2026
+# Latest change: clean CPU CI dependency and Actions update, 3 November 2026
+
+GitHub job 126043562635 failed two listening tests because `requirements-dev.txt` did not include `websockets`. The development machine already had the package, hiding the missing declaration. Dev requirements now include `websockets==15.0.1`, matching the live portal's pin, so both the redirect-policy test and real loopback transport test run in a clean CPU environment without installing GPU packages. A fresh temporary Python 3.11 environment installed only these declared dev requirements and passed all 568 Python tests; all 138 JavaScript tests also pass locally. GitHub continues to run Python 3.12 and Node 22.
+
+The workflow uses the current official Node-24-based `actions/checkout@v7`, `actions/setup-python@v7` and `actions/setup-node@v7`, verified against their release metadata and action definitions. The hosted runner is explicitly `ubuntu-24.04` rather than the migrating `ubuntu-latest` label. CI now runs every `tests/*.test.mjs`, compiles `listening_runtime` and includes the live Slurm wrapper in shell syntax checks. No speech-model environment, model dependency pin or inference behavior was changed. The subsequent GitHub run is the authoritative Linux/Python-3.12 validation.
+
+# Previous change: create additional live characters, 3 November 2026
 
 The live and archive pages now have **New character** next to the picker. A small modal asks for a required name (1–80 characters after trimming) and optional role (up to 120). `CharacterLibrary.create` generates a unique ID independently of the editable name and persists a fresh active profile. Identity facts, memories, goal, environment, voice direction, director notes, triggers and story beats are not copied from the previous character. A new archive-page character enables whole-library retrieval; a normal live character starts with archive access disabled.
 
