@@ -2,7 +2,7 @@
 
 **3 November: optional faster-listening trial.** [Try Nemotron GPU streaming recognition + Smart Turn v3.2](LISTENING_EXPERIMENT.md) with the existing three-GPU profile. It has a separate environment, temporary live transcript and explicit comparison/rollback commands. The default baseline and whole-reply emotional delivery remain available. Actual Surrey timing and GPU fit still need testing.
 
-This experimental mode connects **English speech recognition → director → Qwen3-4B-Instruct-2507 actor → Drama 3**. Start a call once, speak, pause, and hear one continuous voice take for each reply. The microphone waits while the character generates and plays a reply. Use **Stop reply** to take over. The original Qwen3-Omni 30B recorded-turn mode remains available separately.
+This experimental mode connects **English speech recognition → director → Qwen3-4B-Instruct-2507 actor → Drama 3**. Start a call once, speak, pause, and hear one continuous voice take for each reply. New microphone calls enable **Allow interruptions**, so sustained speech can stop the character during preparation or playback. Turn it off to keep the microphone waiting through replies. **Stop reply** remains available. The original Qwen3-Omni 30B recorded-turn mode remains available separately. [Voice interruption behavior and speaker limits](INTERRUPTIONS.md).
 
 **Status, 27 October 2026:** the current code adds earlier recognition preparation and bounded conversation recall to the [director orchestrator](DIRECTOR.md). CPU tests cover final-audio matching, cancellation, heard-history retrieval and transport. No live-model check was performed for this update, so there is no measured H200 speed improvement or new listening-quality result. The complete-reply TTS validation and one-emotion-per-reply policy remain unchanged. This is a cascaded voice system: recognition finalises each utterance after a pause.
 
@@ -87,7 +87,7 @@ Replace `costar07` if your allocation uses another node. Leave the tunnel open a
 1. Choose **Show details**, edit Anna, then wait for **Voice services ready**.
 2. Choose **Test with text** to check reasoning and reply playback without a microphone.
 3. End that session, choose **Start call**, and grant microphone access. Speak a short sentence and pause for about half a second.
-4. Let the answer finish, or choose **Stop reply** to take over. Only a reply that finished playing enters the model's remembered response. An interrupted reply is conservatively omitted. The microphone resumes 350 ms after playback, allowing speaker echo to decay.
+4. Let the answer finish, speak over it with **Allow interruptions** enabled, or choose **Stop reply**. Only a reply that finished playing enters the model's remembered response. An interrupted reply is conservatively omitted. Automatic handover retains the microphone onset and bypasses the old cooldown; ordinary playback completion and manual Stop reply keep their 350 ms speaker-decay delay.
 
 Headphones help prevent output returning through the microphone. The server discards microphone frames throughout final recognition/generation/playback and the echo tail, rather than buffering them as another turn. The endpoint uses **400 ms of silence**; each utterance is capped at 15 seconds. The browser sends microphone batches every **40 ms**, previously 80 ms. The server still examines fixed 20 ms audio frames.
 

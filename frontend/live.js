@@ -9,11 +9,13 @@ import {CharacterLibrary,legacyRecoveryProfiles} from './live-characters.mjs';
 import {ArchivePanel} from './live-archive.mjs';
 import {ListeningFeedback} from './live-listening.mjs';
 import {VoiceProgress} from './live-voice-progress.mjs';
+import {BargeInController} from './live-barge-in.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const archivePage=location.pathname.startsWith('/archive');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 let socket=null,context=null,stream=null,capture=null,playback=null,connecting=false,muted=false,ready=false,currentTurn=0;
 let replyPending=false,resumeTimer=null;
+let interruptionsSupported=false,interruptionsPermitted=false;
 let referenceURL=null;
 let triggerActive=false;
 let sessionReady=false,disconnecting=null;
@@ -25,7 +27,7 @@ const inspector=new PromptInspector({document,send});
 const archivePanel=new ArchivePanel({document,onChange:()=>saveActiveProfile()});
 const listeningFeedback=new ListeningFeedback({label:$('listening-mode'),partial:$('listening-partial'),
   onFinalizing:()=>{holdMicrophone();state('Finishing recognition… · Mic paused');},
-  onListening:()=>{if(replyPending)resumeMicrophone();else state('Listening…');},
+  onListening:()=>{if(bargeIn.pending||replyPending&&bargeIn.isSuppressed(currentTurn))return;if(replyPending)resumeMicrophone();else state('Listening…');},
   onError:message=>{feedback(message);resumeMicrophone();}});
 const directorPanel=new DirectorPanel({button:$('toggle-director'),content:$('director-content'),
   summary:$('director-summary'),empty:$('director-empty')});
@@ -43,6 +45,15 @@ const replies=conversation.replies;
 const voiceProgress=new VoiceProgress({onState:state,onTiming:text=>{$('timing').textContent=text;},onText:text=>{
   if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
   replies.get(currentTurn).content.textContent=text;$('messages').scrollTop=$('messages').scrollHeight;
+}});
+const bargeIn=new BargeInController({send:value=>{
+  if(value instanceof ArrayBuffer){if(socket?.readyState===WebSocket.OPEN)socket.send(value);}else send(value);
+},reference:()=>playback?.referenceWindow()??new Float32Array(0),onStop:()=>{
+  clearTimeout(resumeTimer);voiceProgress.finish(currentTurn);voiceRetry.clear();callFeedback.clearVoiceNotice();playback?.clear();state('Interrupting…');
+},onAccepted:()=>{
+  clearTimeout(resumeTimer);replyPending=false;listeningFeedback.clear();state(muted?'Microphone muted':'Listening…');controls();
+},onRejected:()=>{
+  replyPending=true;feedback('Interruption not confirmed. Use Stop reply.');state('Use Stop reply to take over');controls();
 }});
 let storyView=null;
 const storyEditor=new StoryEditor($('beat-editor'),saveStory);
@@ -120,7 +131,7 @@ function applyProfile(profile){
     clearReference();updateVoicePreset();
     $('chat-title').textContent=`Talk to ${profile.character.name.trim()||'your character'}`;
     clearTimeout(resumeTimer);replyPending=false;currentTurn=0;triggerActive=false;
-    playback?.clear();conversation.reset();inspector.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();
+    playback?.clear();bargeIn.reset();conversation.reset();inspector.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();
     if($('model-inspector').open)$('model-inspector').close();
     $('director-latest').hidden=true;$('director-note').textContent='';$('timing').textContent='';
     $('typed-form').hidden=true;$('typed-message').value='';$('trigger-state').textContent='Start a call to test the reaction.';
@@ -144,7 +155,8 @@ async function loadCharacterLibrary(){
   if(archivePage)$('archive-settings').open=true;
 }
 function feedback(message='',kind='general'){callFeedback.show(message,kind);}
-function state(message){$('call-state').textContent=message;}
+function canSpeakOver(){return !!stream&&sessionReady&&!muted&&$('allow-interruptions').checked&&interruptionsPermitted;}
+function state(message){$('call-state').textContent=canSpeakOver()?message.replace(/ · Mic paused$/,' · Speak to interrupt'):message;}
 function send(value){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(value));}
 function delivery(){return {emotion:$('voice-emotion').value,event:$('voice-event').value,direction:$('voice-direction').value};}
 async function voiceSettings(){
@@ -176,6 +188,8 @@ function controls(){
   $('start-call').querySelector('span').textContent=connected?'End session':connecting?'Connecting…':'Start call';
   $('mute').hidden=!connected||!stream;$('interrupt').hidden=!connected;
   $('interrupt').disabled=!replyPending;
+  $('allow-interruptions').disabled=connecting||!!connected&&!interruptionsSupported;
+  $('interruptions-option').hidden=!!connected&&!stream;
   $('text-mode').hidden=!!connected;$('text-mode').disabled=connecting||!ready;
   $('send-text').disabled=!connected||!sessionReady;
   for(const element of form.elements)element.disabled=element.dataset.liveSetting?connecting:!!connected||connecting;
@@ -192,6 +206,7 @@ async function disconnect(){
   inspector.setConnected(false);
   archivePanel.resetSources();
   listeningFeedback.reset();
+  bargeIn.reset();interruptionsPermitted=false;
   voiceRetry.clear();
   voiceProgress.clear();
   callFeedback.clearVoiceNotice();
@@ -206,6 +221,12 @@ async function disconnect(){
   return disconnecting;
 }
 function event(data){
+  if(data.type==='barge_in_ready'){bargeIn.acknowledge(data);return;}
+  if(data.type==='interruptions_ack'){
+    interruptionsPermitted=data.enabled===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});
+    if(replyPending&&!bargeIn.isSuppressed(currentTurn))state('Reply in progress · Mic paused');return;
+  }
+  if(bargeIn.isSuppressed(data.turn_id)&&data.type!=='interrupted')return;
   if(data.type==='listening_state'||data.type==='listening_partial'){listeningFeedback.accept(data);return;}
   if(data.type==='model_inspection'){inspector.accept(data);return;}
   if(data.type==='archive_sources'){archivePanel.showSources(data);return;}
@@ -225,12 +246,12 @@ function event(data){
     else if(data.action==='hold')$('trigger-state').textContent=(triggerActive?'Reaction continues':'Normal state')+(data.evidence?` · ${data.evidence}`:'');
     state('Thinking… · Mic paused');return;
   }
-  if(data.type==='ready'){listeningFeedback.setMode(data.listening_mode);sessionReady=true;inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
+  if(data.type==='ready'){listeningFeedback.setMode(data.listening_mode);sessionReady=true;interruptionsPermitted=data.interruptions===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
-  if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
+  if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;bargeIn.begin(data.turn_id);listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
   if(data.type==='interrupted'){
-    if(data.turn_id===currentTurn){voiceProgress.finish(currentTurn);voiceRetry.clear();playback.clear();resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
+    if(data.turn_id===currentTurn){voiceProgress.finish(currentTurn);voiceRetry.clear();playback.clear();if(!bargeIn.isSuppressed(data.turn_id))resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
     return;
   }
   if(data.type==='error'){voiceRetry.handleError(data,currentTurn);return;}
@@ -266,13 +287,16 @@ async function connect(useMic=true){
   }
   connecting=true;feedback();controls();
   try{
-    conversation.reset();inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
+    conversation.reset();bargeIn.reset();interruptionsPermitted=false;inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}
     playback=new PCMPlayback(context,send,()=>state('Speaking… · Mic paused'),resumeMicrophone);
     if(useMic){
       stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}});
+      for(const track of stream.getAudioTracks()){
+        try{if(track.getCapabilities?.().echoCancellation?.includes?.('all'))await track.applyConstraints({echoCancellation:{ideal:'all'}});}catch(error){}
+      }
       await context.audioWorklet.addModule('/static/live-capture-worklet.js');
     }
     const url=new URL('/api/live',location.href);url.protocol=location.protocol==='https:'?'wss:':'ws:';
@@ -281,14 +305,16 @@ async function connect(useMic=true){
     opened.onerror=()=>{if(socket===opened)feedback('Cannot connect to the live server. Check its terminal and SSH tunnel.');};
     opened.onclose=async()=>{if(socket===opened){feedback('Live connection closed. Check that all three services are ready.');await disconnect();}};
     await new Promise((resolve,reject)=>{opened.onopen=resolve;opened.addEventListener('error',reject,{once:true});opened.addEventListener('close',()=>reject(new Error('Connection closed')),{once:true});});
-    send({type:'start',character:character(),voice,trigger:triggerSettings(),director:directorSettings(),narrative:narrativeSettings(),archive:archivePanel.settings()});
+    send({type:'start',character:character(),voice,trigger:triggerSettings(),director:directorSettings(),narrative:narrativeSettings(),archive:archivePanel.settings(),interruptions:useMic&&$('allow-interruptions').checked});
     if(useMic){
       const source=context.createMediaStreamSource(stream),gain=context.createGain();gain.gain.value=0;
       capture=new AudioWorkletNode(context,'live-capture');const resampler=new StreamResampler(context.sampleRate);
       capture.port.onmessage=async chunk=>{
-        if(socket!==opened||!sessionReady||muted||replyPending||socket?.readyState!==WebSocket.OPEN)return;
+        if(socket!==opened||!sessionReady||muted||socket?.readyState!==WebSocket.OPEN)return;
         if(socket.bufferedAmount>262144){feedback('Connection is too slow for live audio. Reconnect after checking the tunnel.');await disconnect();return;}
-        const samples=resampler.push(chunk.data);if(samples.length)socket.send(pcm16(samples));
+        const samples=resampler.push(chunk.data);if(!samples.length)return;
+        if(replyPending){if(canSpeakOver())bargeIn.feed(samples);return;}
+        socket.send(pcm16(samples));
       };
       source.connect(capture);capture.connect(gain);gain.connect(context.destination);
     }
@@ -297,9 +323,15 @@ async function connect(useMic=true){
 }
 $('start-call').addEventListener('click',()=>void connect(true));
 $('text-mode').addEventListener('click',()=>void connect(false));
-$('mute').addEventListener('click',()=>{muted=!muted;if(stream)stream.getAudioTracks().forEach(track=>track.enabled=!muted);send({type:'mute'});$('mute').textContent=muted?'Unmute mic':'Mute mic';state(muted?'Microphone muted':replyPending?'Reply in progress · Mic paused':'Listening…');});
-$('interrupt').addEventListener('click',()=>{playback?.clear();send({type:'interrupt'});resumeMicrophone();});
-$('typed-form').addEventListener('submit',e=>{e.preventDefault();const text=$('typed-message').value.trim();if(text){holdMicrophone();send({type:'text',text});$('typed-message').value='';feedback();}});
+$('mute').addEventListener('click',()=>{if(bargeIn.pending)feedback('Interruption input cleared. Use Stop reply to take over.');bargeIn.cancel();muted=!muted;if(stream)stream.getAudioTracks().forEach(track=>track.enabled=!muted);send({type:'mute'});$('mute').textContent=muted?'Unmute mic':'Mute mic';state(muted?'Microphone muted':replyPending?'Reply in progress · Mic paused':'Listening…');});
+$('interrupt').addEventListener('click',()=>{bargeIn.reset();playback?.clear();send({type:'interrupt'});resumeMicrophone();});
+$('allow-interruptions').addEventListener('change',()=>{
+  const pending=!!bargeIn.pending;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});
+  send({type:'interruptions',enabled:$('allow-interruptions').checked});
+  if(pending){feedback('Interruption input cleared. Use Stop reply to take over.');state('Use Stop reply to take over');}
+  else if(replyPending)state('Reply in progress · Mic paused');
+});
+$('typed-form').addEventListener('submit',e=>{e.preventDefault();const text=$('typed-message').value.trim();if(text){bargeIn.cancel();holdMicrophone();send({type:'text',text});$('typed-message').value='';feedback();}});
 $('toggle-profile').addEventListener('click',()=>{form.hidden=!form.hidden;$('toggle-profile').setAttribute('aria-expanded',String(!form.hidden));$('toggle-profile').textContent=form.hidden?'Show details':'Hide details';});
 form.addEventListener('input',()=>{const name=form.elements.name.value.trim()||'your character';$('chat-title').textContent=`Talk to ${name}`;});
 form.addEventListener('input',saveActiveProfile);
@@ -363,7 +395,7 @@ $('clear-reference').addEventListener('click',clearReference);
 for(const id of ['trigger-enabled','trigger-action','trigger-condition','trigger-emotion','trigger-behaviour','trigger-cue','trigger-delivery'])$(id).addEventListener('input',()=>{
   $('trigger-fields').hidden=!$('trigger-enabled').checked;$('test-trigger').textContent=$('trigger-action').value||'Test reaction';controls();
 });
-$('test-trigger').addEventListener('click',()=>{holdMicrophone();send({type:'trigger'});});
+$('test-trigger').addEventListener('click',()=>{bargeIn.cancel();holdMicrophone();send({type:'trigger'});});
 $('clear-trigger').addEventListener('click',()=>send({type:'clear_trigger'}));
 $('send-direction').addEventListener('click',()=>{const settings=directorSettings();send({type:'director',settings});
   saveActiveProfile();
@@ -375,17 +407,19 @@ $('load-story-example').addEventListener('click',()=>{
   const settings=characterLibrary?.preset()?.narrative;if(!settings)return;
   storyEditor.load(settings.beats);$('story-enabled').checked=settings.enabled;$('story-mode').value=settings.mode;saveStory();controls();
 });
-for(const [id,action] of [['next-beat','next'],['previous-beat','previous'],['cue-beat','cue']])$(id).addEventListener('click',()=>send({type:'story',control:{action}}));
+for(const [id,action] of [['next-beat','next'],['previous-beat','previous'],['cue-beat','cue']])$(id).addEventListener('click',()=>{bargeIn.cancel();send({type:'story',control:{action}});});
 $('hold-story').addEventListener('click',()=>send({type:'story',control:{action:storyView?.paused?'resume':'pause'}}));
 for(const id of ['director-enabled','director-input'])$(id).addEventListener('change',()=>{
   const settings=directorSettings();send({type:'director',settings});
 });
 async function status(){
   try{
-    const response=await fetch('/api/status'),data=await response.json();ready=data.ready;inspector.setSupported(data.model_inspection===true);
+    const response=await fetch('/api/status'),data=await response.json();ready=data.ready;interruptionsSupported=data.voice_interruptions===true;inspector.setSupported(data.model_inspection===true);
     listeningFeedback.setMode(data.listening?.mode);
     $('status').textContent=data.preview?'Design preview':ready?'Voice services ready':'Services starting…';$('status').className=ready?'ready':'';
-    $('mode-note').textContent=data.preview?'Design preview. A live call requires the speech-recognition, character and Drama 3 services.':ready?'Speak and pause to hear a reply. Your mic waits until the answer finishes. Use Stop reply to take over.':data.stt_error||Object.entries(data.services).map(([name,ok])=>`${name.toUpperCase()}: ${ok?'ready':'not ready'}`).join(' · ');
+    $('mode-note').textContent=data.preview?'Design preview. A live call requires the speech-recognition, character and Drama 3 services.':ready
+      ?interruptionsSupported&&$('allow-interruptions').checked?'Speak and pause to hear a reply. With Allow interruptions on, speak over the character or use Stop reply.':'Speak and pause to hear a reply. Use Stop reply to take over while the character is speaking.'
+      :data.stt_error||Object.entries(data.services).map(([name,ok])=>`${name.toUpperCase()}: ${ok?'ready':'not ready'}`).join(' · ');
     if(data.busy&&!socket){ready=false;$('mode-note').textContent='Another voice session is active. End that call before starting a new one.';}
     if(data.models)$('director-model').textContent=`${data.profile} · Actor: ${data.models.actor.split('/').pop()} · Director: ${data.models.director.split('/').pop()}${data.director.shared_model?' (shared server)':''}`;
     controls();

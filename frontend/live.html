@@ -87,9 +87,10 @@
 <div class="call-controls"><p id="call-state" role="status">Ready when you are</p><div class="call-buttons">
 <button id="start-call" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span>Start call</span></button>
 <button id="mute" class="secondary" hidden>Mute mic</button><button id="interrupt" class="secondary" hidden>Stop reply</button><button id="text-mode" class="quiet">Test with text</button></div>
+<label id="interruptions-option" class="hint small center"><input id="allow-interruptions" type="checkbox" checked> Allow interruptions</label>
 <div id="feedback" role="alert"></div><button type="button" id="retry-voice" class="quiet" hidden disabled>Retry voice</button><div id="timing" class="hint small"></div>
 <form id="typed-form" class="composer" hidden><label class="sr-only" for="typed-message">Message your character</label><textarea id="typed-message" rows="1" maxlength="2000" placeholder="Type a message…"></textarea><button id="send-text" class="primary" type="submit">Send ↑</button></form>
-<p class="hint small center">Mic waits during replies · Replies play as they arrive · Headphones recommended</p>
+<p class="hint small center">Speak to interrupt, or use Stop reply · Headphones help avoid speaker echo</p>
 <p class="attribution">Built with Fish Audio · Speech recognition → director → character actor → Drama 3 voice</p></div>
 </section></main>
 <dialog id="new-character-dialog" aria-labelledby="new-character-title" aria-describedby="new-character-description">

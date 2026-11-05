@@ -23,7 +23,7 @@ export function unpackAudio(buffer){
 }
 
 export class PCMPlayback {
-  constructor(context,send,onSpeaking,onIdle){this.context=context;this.send=send;this.onSpeaking=onSpeaking;this.onIdle=onIdle;this.sources=new Set();this.turn=0;this.phrases=new Map();this.nextAck=0;this.nextTime=0;this.finished=false;this.rate=44100;this.prebufferSamples=Math.ceil(this.rate*.12);this.batchSamples=Math.ceil(this.rate*.06);}
+  constructor(context,send,onSpeaking,onIdle){this.context=context;this.send=send;this.onSpeaking=onSpeaking;this.onIdle=onIdle;this.sources=new Set();this.recent=[];this.turn=0;this.phrases=new Map();this.nextAck=0;this.nextTime=0;this.finished=false;this.rate=44100;this.prebufferSamples=Math.ceil(this.rate*.12);this.batchSamples=Math.ceil(this.rate*.06);}
   setTurn(turn){this.clear();this.turn=turn;}
   record(sequence){if(!this.phrases.has(sequence))this.phrases.set(sequence,{pending:0,done:false,acked:false,buffers:[],samples:0});return this.phrases.get(sequence);}
   push(buffer){
@@ -45,10 +45,29 @@ export class PCMPlayback {
     const audio=this.context.createBuffer(1,samples.length,this.rate);
     audio.copyToChannel(samples,0);
     const source=this.context.createBufferSource();source.buffer=audio;source.connect(this.context.destination);
-    const holder={source,cancelled:false};this.sources.add(holder);record.pending++;
-    source.onended=()=>{this.sources.delete(holder);if(holder.cancelled)return;record.pending--;this.acknowledge();};
+    const holder={source,cancelled:false,start:0,end:0};this.sources.add(holder);record.pending++;
+    source.onended=()=>{this.sources.delete(holder);if(holder.cancelled)return;this.recent.push(holder);this.pruneReferences();record.pending--;this.acknowledge();};
     const when=Math.max(this.context.currentTime+.025,this.nextTime);this.nextTime=when+audio.duration;
+    holder.start=when;holder.end=this.nextTime;
     source.start(when);this.onSpeaking();
+  }
+  pruneReferences(){this.recent=this.recent.filter(holder=>!holder.cancelled&&holder.end>=this.context.currentTime-.6);}
+  referenceWindow(endTime=this.context.currentTime,duration=.6,rate=16000){
+    if(!Number.isFinite(endTime)||!Number.isFinite(duration)||!Number.isInteger(rate)||rate<4000||rate>48000)return new Float32Array(0);
+    duration=Math.max(0,Math.min(.6,duration));this.pruneReferences();
+    const output=new Float32Array(Math.ceil(duration*rate)),start=endTime-duration;
+    for(const holder of [...this.recent,...this.sources]){
+      if(holder.cancelled||holder.start>=endTime||holder.end<=start)continue;
+      const audio=holder.source.buffer,samples=audio.getChannelData?.(0)??audio.samples;
+      if(!samples)continue;
+      const first=Math.max(0,Math.ceil((holder.start-start)*rate)),last=Math.min(output.length,Math.ceil((holder.end-start)*rate));
+      for(let index=first;index<last;index++){
+        const position=(start+index/rate-holder.start)*this.rate,base=Math.floor(position);
+        if(base<0||base>=samples.length)continue;
+        const fraction=position-base;output[index]=samples[base]*(1-fraction)+(samples[Math.min(base+1,samples.length-1)]??0)*fraction;
+      }
+    }
+    return output;
   }
   phraseDone(sequence){this.record(sequence).done=true;this.flush(sequence,true);this.acknowledge();}
   responseDone(){this.finished=true;this.acknowledge();}
@@ -63,6 +82,6 @@ export class PCMPlayback {
   }
   clear(){
     for(const holder of this.sources){holder.cancelled=true;try{holder.source.stop();holder.source.disconnect();}catch(error){}}
-    this.sources.clear();this.phrases.clear();this.nextAck=0;this.nextTime=0;this.finished=false;this.turn=0;
+    this.sources.clear();this.recent=[];this.phrases.clear();this.nextAck=0;this.nextTime=0;this.finished=false;this.turn=0;
   }
 }

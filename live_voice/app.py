@@ -288,7 +288,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 "archive":({"available":True,"scope":"library","limit":MAX_DATABASE_ENTRIES,
                             "selection_limit":50,"bulk_import":True} if isinstance(archive_store,ArchiveDatabase)
                            else {"available":True,"scope":"selected","limit":50}),
-                "beat_entry_replies":True, "voice_retry":True,
+                "beat_entry_replies":True, "voice_retry":True, "voice_interruptions":True,
                 "voice_verification":bool(getattr(services,'verify_voice',False)),
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
@@ -342,6 +342,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         session = None
         archive_search = None
         listener = None
+        barge_in_timer = None
         listening_sequence = 0
         send_lock = asyncio.Lock()
         async def send_json(value):
@@ -361,6 +362,8 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             config = json.loads(initial)
             if not isinstance(config, dict) or config.get("type") != "start":
                 raise ValueError("Start a character call first.")
+            interruptions = config.get('interruptions', False)
+            if type(interruptions) is not bool: raise ValueError('Invalid interruption setting.')
             selected = Character.model_validate(config.get("character"))
             voice = VoiceSettings.model_validate(config.get("voice", {}))
             trigger = EmotionalTrigger.model_validate(config["trigger"]) if config.get("trigger") is not None else None
@@ -389,8 +392,19 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                                   narrative=narrative, archive=archive if archive.enabled else None, archive_entries=archive_entries,
                                   archive_search=archive_search)
             listen_after = 0.0
+            accepted_barge_in_turn = None
+            barge_in_reserved = False
+            barge_in_epoch = 0
+            def clear_barge_in_reservation():
+                nonlocal barge_in_reserved, barge_in_timer, barge_in_epoch
+                barge_in_reserved = False
+                barge_in_epoch += 1
+                if barge_in_timer is not None:
+                    barge_in_timer.cancel()
+                    barge_in_timer = None
             async def clear_microphone():
                 nonlocal listening_sequence
+                clear_barge_in_reservation()
                 detector.pending.clear(); detector.reset()
                 if listener is not None:
                     was_active = listener.input_active
@@ -402,6 +416,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             if experimental is not None:
                 async def input_started():
                     nonlocal listening_sequence
+                    clear_barge_in_reservation()
                     listening_sequence += 1
                     session.input_active = True
                     await send_json({'type':'speech_start'})
@@ -413,13 +428,16 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 async def input_final(pcm, text, endpoint_ms, metrics):
                     await session.begin(text=text,endpoint_ms=endpoint_ms,recognition_metrics=metrics)
                 async def input_error(message):
+                    clear_barge_in_reservation()
                     session.input_active = False
                     await send_json({'type':'listening_state','phase':'error','input_id':listening_sequence,'message':message})
                 listener = ListeningSession(experimental,detector.is_speech,on_start=input_started,
                     on_partial=input_partial,on_endpoint=input_endpoint,on_final=input_final,on_error=input_error)
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
                              "endpoint_ms":300 if experimental is not None else detector.silence_frames * 20,
-                             "turn_taking":"Stop reply to interrupt; mic resumes after playback",
+                             "turn_taking":("Speak to interrupt; Stop reply remains available" if interruptions
+                                            else "Stop reply to interrupt; mic resumes after playback"),
+                             "interruptions":interruptions,
                              "listening_mode":input_mode,
                              "voice":"uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated reply anchors this call"})
             await session.start_story()
@@ -436,10 +454,13 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                         continue
                     if listener is not None:
                         await listener.feed(packet)
-                        session.input_active = listener.input_active
+                        # Barge-in reserves the floor before its buffered onset
+                        # reaches the streaming listener's three VAD votes.
+                        session.input_active = barge_in_reserved or listener.input_active
                         continue
                     for event, pcm, endpoint_ms in detector.feed(packet):
                         if event == "start":
+                            clear_barge_in_reservation()
                             session.input_active = True
                             await send_json({"type":"speech_start"})
                         elif event == "prepare":
@@ -449,6 +470,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                             await clear_microphone()
                             break
                         elif event == "noise":
+                            clear_barge_in_reservation()
                             session.input_active = False
                             await send_json({"type":"listening"})
                 elif message.get("text") is not None:
@@ -457,6 +479,47 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                     if not isinstance(command, dict): raise ValueError("Invalid control message.")
                     if command.get("type") == "inspect":
                         await session.inspection.subscribe(command.get('enabled'))
+                    elif command.get('type') == 'interruptions':
+                        enabled = command.get('enabled')
+                        if type(enabled) is not bool: raise ValueError('Invalid interruption setting.')
+                        interruptions = enabled
+                        await send_json({'type':'interruptions_ack','enabled':interruptions})
+                    elif command.get('type') == 'barge_in':
+                        turn = command.get('turn_id')
+                        if type(turn) is not int or not 0 < turn <= 0xffffffff:
+                            raise ValueError('Invalid voice interruption.')
+                        accepted = False
+                        # The streaming recognizer and narrative clock can
+                        # start turns independently of this receive loop.
+                        async with session.begin_lock:
+                            if (interruptions and not session.closed and turn == session.turn_id
+                                    and turn != accepted_barge_in_turn and not session.input_active):
+                                session.input_active = True
+                                director_task = session.story_director_task
+                                if director_task and not director_task.done():
+                                    director_task.cancel()
+                                    await asyncio.gather(director_task,return_exceptions=True)
+                                await session.interrupt()
+                                await session.prepared_recognition.clear()
+                                await clear_microphone()
+                                if not session.closed and turn == session.turn_id:
+                                    # Admit the buffered first syllable immediately;
+                                    # manual Stop reply retains its echo cooldown.
+                                    session.input_active = True
+                                    barge_in_reserved = True
+                                    def expire_reservation(turn_id=turn, epoch=barge_in_epoch):
+                                        nonlocal barge_in_reserved, barge_in_timer
+                                        if (barge_in_reserved and epoch == barge_in_epoch
+                                                and not session.closed and session.turn_id == turn_id):
+                                            barge_in_reserved = False
+                                            barge_in_timer = None
+                                            if not detector.active and not (listener and listener.input_active):
+                                                session.input_active = False
+                                    barge_in_timer = asyncio.get_running_loop().call_later(2.0,expire_reservation)
+                                    accepted_barge_in_turn = turn
+                                    listen_after = 0.0
+                                    accepted = True
+                        await send_json({'type':'barge_in_ready','turn_id':turn,'accepted':accepted})
                     elif command.get("type") == "retry_voice":
                         turn = command.get('turn_id')
                         if type(turn) is not int: raise ValueError('Invalid voice retry.')
@@ -479,7 +542,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                     elif command.get("type") == "text":
                         text = command.get("text","")
                         if not isinstance(text,str) or not 0 < len(text.strip()) <= 2000: raise ValueError("Enter a short message.")
-                        if listener is not None: await clear_microphone()
+                        await clear_microphone()
                         await session.begin(text=text.strip())
                     elif command.get("type") == "mute":
                         await clear_microphone()
@@ -493,7 +556,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                         await send_json({"type":"director_ack","message":"Direction saved for the next reply."})
                     elif command.get("type") == "story":
                         control=StoryControl.model_validate(command.get("control"))
-                        if listener is not None and control.action == 'cue': await clear_microphone()
+                        if control.action == 'cue': await clear_microphone()
                         await session.story_control(control.action)
                     elif command.get("type") == "trigger":
                         await clear_microphone()
@@ -523,6 +586,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             # worker or leave the single-call lock held for the next visitor.
             with CancelScope(shield=True):
                 try:
+                    if barge_in_timer is not None: barge_in_timer.cancel()
                     try:
                         if listener is not None: await listener.close()
                     finally:
