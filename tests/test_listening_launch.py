@@ -210,13 +210,32 @@ class BatchForwardingTests(unittest.TestCase):
             (root/'scripts/run_live_stack.sh').write_text('#!/bin/bash\nexit 99\n')
             batch=root/'scripts/run_live_slurm.sbatch'; shutil.copyfile(ROOT/'scripts/run_live_slurm.sbatch',batch)
             tools=root/'tools'; tools.mkdir(); output=root/'srun.json'
-            srun=tools/'srun'; srun.write_text('#!'+sys.executable+'\nimport json,os,sys\nwith open(os.environ["LISTENING_TEST_OUTPUT"],"w") as stream:json.dump(sys.argv[1:],stream)\nraise SystemExit(31)\n'); srun.chmod(0o755)
+            srun=tools/'srun'; srun.write_text('#!'+sys.executable+'\n'+'''import json,os,sys
+keys=('SLURM_JOB_ID','SLURM_CPUS_PER_TASK','SLURM_JOB_CPUS_PER_NODE','CUDA_VISIBLE_DEVICES',
+      'SLURM_CPU_BIND','SLURM_CPU_BIND_LIST','SLURM_CPU_BIND_TYPE','SLURM_CPU_BIND_VERBOSE',
+      'SRUN_CPU_BIND','LIVE_VERIFY_VOICE')
+with open(os.environ['LISTENING_TEST_OUTPUT'],'w') as stream:
+    json.dump({'argv':sys.argv[1:],'environment':{key:os.environ[key] for key in keys if key in os.environ}},stream)
+raise SystemExit(31)
+'''); srun.chmod(0o755)
             environment=dict(os.environ,PATH=str(tools)+os.pathsep+os.environ.get('PATH',''),SLURM_JOB_ID='fake-job',
-                             SLURM_SUBMIT_DIR=str(root),LISTENING_TEST_OUTPUT=str(output))
+                             SLURM_SUBMIT_DIR=str(root),LISTENING_TEST_OUTPUT=str(output),SLURM_CPUS_PER_TASK='24',
+                             SLURM_JOB_CPUS_PER_NODE='24',CUDA_VISIBLE_DEVICES='GPU-a,GPU-b,GPU-c',LIVE_VERIFY_VOICE='0',
+                             SLURM_CPU_BIND='mask_cpu:0xf000000',SLURM_CPU_BIND_LIST='0xf000000',
+                             SLURM_CPU_BIND_TYPE='mask_cpu:',SLURM_CPU_BIND_VERBOSE='verbose',
+                             SRUN_CPU_BIND='unrelated-value')
             result=subprocess.run(['bash',str(batch),'--listening',EXPERIMENT],env=environment,capture_output=True,text=True,timeout=5)
             self.assertEqual(result.returncode,31)
-            self.assertEqual(json.loads(output.read_text()),['--ntasks=1','bash','scripts/run_live_stack.sh',
-                                                           '--profile','quality-3gpu','--listening',EXPERIMENT])
+            recorded=json.loads(output.read_text())
+            self.assertEqual(recorded['argv'],['--ntasks=1','--cpus-per-task=24','--cpu-bind=none',
+                                              'bash','scripts/run_live_stack.sh',
+                                              '--profile','quality-3gpu','--listening',EXPERIMENT])
+            self.assertNotIn('--overlap',recorded['argv'])
+            for key in ('SLURM_CPU_BIND','SLURM_CPU_BIND_LIST','SLURM_CPU_BIND_TYPE','SLURM_CPU_BIND_VERBOSE'):
+                self.assertNotIn(key,recorded['environment'])
+            for key in ('SLURM_JOB_ID','SLURM_CPUS_PER_TASK','SLURM_JOB_CPUS_PER_NODE',
+                        'CUDA_VISIBLE_DEVICES','LIVE_VERIFY_VOICE','SRUN_CPU_BIND'):
+                self.assertEqual(recorded['environment'][key],environment[key])
 
 
 if __name__ == '__main__': unittest.main()

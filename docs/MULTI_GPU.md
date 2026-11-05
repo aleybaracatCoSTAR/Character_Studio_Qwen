@@ -36,6 +36,14 @@ Do not start another stack from an overlapping shell while the batch job is alre
 
 The wrapper requires Slurm's job/submission-directory variables and a repository containing the live launcher. Running it with plain `bash` on the login node is rejected. It delegates to `srun` inside the batch allocation so Slurm still owns the GPU processes. Local tests use a fake `srun` and fake model launcher; no batch job was submitted during implementation.
 
+### CPU binding during batch startup
+
+If startup reports `CPU binding outside of job step allocation` / `Unable to satisfy cpu bind request`, the application step has not launched. Submitting a new batch job from an interactive GPU shell can carry a CPU mask for the previous allocation into the new job; site automatic-binding policy can also affect the step. This error alone does not establish a GPU or model failure.
+
+The wrapper now clears only `SLURM_CPU_BIND`, `SLURM_CPU_BIND_LIST`, `SLURM_CPU_BIND_TYPE` and `SLURM_CPU_BIND_VERBOSE`, then explicitly starts its one step with `--cpu-bind=none` and the current allocation's `SLURM_CPUS_PER_TASK` (24 when unset). It preserves the new job's identity, CPU allocation and `CUDA_VISIBLE_DEVICES`, forwards the listening flag and propagates the application exit status. Resource requests remain three H200s and 24 CPUs. See [Slurm's CPU-binding and environment precedence](https://slurm.schedmd.com/srun.html).
+
+Pull this update before submitting another batch job. Prefer submission from `login01`. If you already have an interactive three-GPU allocation, run `bash scripts/run_live_stack.sh --profile quality-3gpu --listening nemotron-smart-turn` inside it instead of requesting a second allocation. The baseline works by substituting `--listening baseline`. Fake-step tests cover inherited masks and preservation of current allocation variables; the actual Surrey scheduler launch still needs confirmation.
+
 ## 1. Request an interactive allocation on the Surrey login node
 
 Stop an earlier stack and release its old allocation when finished with it. Do not launch large models on `login01`.

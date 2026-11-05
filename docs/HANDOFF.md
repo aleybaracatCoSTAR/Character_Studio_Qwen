@@ -1,4 +1,10 @@
-# Latest change: clean CPU CI dependency and Actions update, 3 November 2026
+# Latest change: batch-step CPU affinity, 5 November 2026
+
+Surrey batch job 80315 reached `costar07` but its first `srun` step failed with `CPU binding outside of job step allocation` / `Unable to satisfy cpu bind request`, before the live launcher or any model started. The user submitted from a `costar07` shell and subsequently showed a separate running interactive job, 80203. An inherited mask from the older allocation is a plausible cause; the provided log alone cannot distinguish it from site automatic-binding policy.
+
+`scripts/run_live_slurm.sbatch` now unsets only the four inherited Slurm CPU-affinity variables and uses an explicit `--cpu-bind=none` plus the current job's CPU-per-task value (fallback 24). New job/GPU/CPU allocation variables are retained. It still launches one owned task, forwards `--listening`, propagates status and requests the same three H200s/24 CPUs/256 GiB/four hours. All 571 CPU tests pass, including fake-step regressions that exercise poisoned masks, current CPU counts and allocation metadata. Surrey scheduler execution remains a user-side validation; no remote allocation was submitted or cancelled here. [CPU binding and launch options](MULTI_GPU.md#cpu-binding-during-batch-startup).
+
+# Previous change: clean CPU CI dependency and Actions update, 3 November 2026
 
 GitHub job 126043562635 failed two listening tests because `requirements-dev.txt` did not include `websockets`. The development machine already had the package, hiding the missing declaration. Dev requirements now include `websockets==15.0.1`, matching the live portal's pin, so both the redirect-policy test and real loopback transport test run in a clean CPU environment without installing GPU packages. A fresh temporary Python 3.11 environment installed only these declared dev requirements and passed all 568 Python tests; all 138 JavaScript tests also pass locally. GitHub continues to run Python 3.12 and Node 22.
 

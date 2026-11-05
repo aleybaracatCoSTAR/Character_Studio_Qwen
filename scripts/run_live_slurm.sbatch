@@ -30,4 +30,9 @@ if [[ "${LIVE_VERIFY_VOICE:-1}" == '0' ]]; then
 else
   echo 'Spoken-word verification: enabled'
 fi
-exec srun --ntasks=1 bash scripts/run_live_stack.sh --profile quality-3gpu "$@"
+# sbatch may have been submitted from inside an interactive srun allocation.
+# Its CPU mask names the old allocation's cores and is invalid in the new job.
+# Keep the new job/GPU allocation variables; clear only inherited affinity.
+unset SLURM_CPU_BIND SLURM_CPU_BIND_LIST SLURM_CPU_BIND_TYPE SLURM_CPU_BIND_VERBOSE
+exec srun --ntasks=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-24}" --cpu-bind=none \
+  bash scripts/run_live_stack.sh --profile quality-3gpu "$@"
