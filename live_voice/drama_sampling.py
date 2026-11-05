@@ -3,9 +3,10 @@
 The upstream sampler is Apache-2.0, copyright vLLM-Omni contributors:
 https://github.com/vllm-project/vllm-omni/blob/798fef99a33fba3ad3c2439d6ec10fe838c0076b/vllm_omni/model_executor/models/fish_omni/sampling.py
 
-Only acoustic-head top-k is changed here. The live deployment separately gives
-the main sampler capacity for all 4096 candidates. This is not SGLang reference
-sampling and does not alter top-p, repetition handling, or the CUDA packages.
+Acoustic heads are restricted to the DAC's 1024 valid codes and top-k 30. The
+live deployment separately gives the main sampler all 4096 candidates. This is
+not SGLang reference sampling and does not alter top-p, repetition handling,
+or the CUDA packages.
 """
 from __future__ import annotations
 
@@ -23,15 +24,31 @@ import tempfile
 REQUEST_SAMPLING = {"temperature": 1.0, "top_p": 0.9, "top_k": 0}
 MAIN_TOP_K = 4096
 RESIDUAL_TOP_K = 30
+RESIDUAL_CODEBOOK_SIZE = 1024
 PINNED_COMMIT = "798fef99a33fba3ad3c2439d6ec10fe838c0076b"
 _PINNED_VERSION = "0.32.0rc2.dev59+g798fef99a"
 _EXPECTED_PREFIX = Path(__file__).resolve().parents[1] / ".venv-drama3"
 _SAMPLER_PATH = "vllm_omni/model_executor/models/fish_omni/sampling.py"
 _MODULE = "vllm_omni.model_executor.models.fish_omni.sampling"
 _ORIGINAL_SHA256 = "33db22e1338d4214a1e0ed0be919cdfba6b1865c095d0a17fa54dc222e332e03"
-_PATCHED_SHA256 = "038b2c5eea5a8a8ed48c435429c0a7b3bb2e2aed0cd265e7a783f7aad829c4d7"
-_ORIGINAL_FRAGMENT = b"logits, temperature, top_k, top_p, noise[:, self.NUM_DRAWS_EXTRA + head_index], self.max_top_k"
-_PATCHED_FRAGMENT = b"logits, temperature, top_k.clamp(max=30), top_p, noise[:, self.NUM_DRAWS_EXTRA + head_index], self.max_top_k"
+_V1_SHA256 = "038b2c5eea5a8a8ed48c435429c0a7b3bb2e2aed0cd265e7a783f7aad829c4d7"
+_PATCHED_SHA256 = "f228a123b01acac452c35092fe170f2a1ca7bb6e3195edadb086b702f9cabf94"
+_ORIGINAL_FRAGMENT = (
+    b"        return draw_top_k_top_p(\n"
+    b"            logits, temperature, top_k, top_p, noise[:, self.NUM_DRAWS_EXTRA + head_index], self.max_top_k\n"
+    b"        )"
+)
+_V1_FRAGMENT = _ORIGINAL_FRAGMENT.replace(b"top_k, top_p", b"top_k.clamp(max=30), top_p")
+_PATCHED_FRAGMENT = (
+    b"        # DAC residual codebooks hold 1024 entries, despite the wider heads.\n"
+    b"        # Keep the full candidate/noise shape required by the captured draw.\n"
+    b"        residual_logits = logits.clone()\n"
+    b"        residual_logits[..., 1024:] = -float(\"inf\")\n"
+    b"        return draw_top_k_top_p(\n"
+    b"            residual_logits, temperature, top_k.clamp(max=30), top_p,\n"
+    b"            noise[:, self.NUM_DRAWS_EXTRA + head_index], self.max_top_k\n"
+    b"        )"
+)
 
 
 class SamplingRepairError(RuntimeError):
@@ -93,10 +110,22 @@ def _paths(source: Path) -> tuple[Path, Path]:
 
 def _marker() -> dict:
     return {
-        "schema": 1,
+        "schema": 2,
         "upstream_commit": PINNED_COMMIT,
         "original_sha256": _ORIGINAL_SHA256,
         "patched_sha256": _PATCHED_SHA256,
+        "residual_top_k": RESIDUAL_TOP_K,
+        "residual_codebook_size": RESIDUAL_CODEBOOK_SIZE,
+    }
+
+
+def _v1_marker() -> dict:
+    """Only this exact earlier repair marker may be upgraded in place."""
+    return {
+        "schema": 1,
+        "upstream_commit": PINNED_COMMIT,
+        "original_sha256": _ORIGINAL_SHA256,
+        "patched_sha256": _V1_SHA256,
         "residual_top_k": RESIDUAL_TOP_K,
     }
 
@@ -108,7 +137,9 @@ def _read_state(source: Path) -> tuple[str, bytes]:
         return "original", data
     if digest == _PATCHED_SHA256:
         return "patched", data
-    raise SamplingRepairError("Drama 3 sampler source differs from both verified versions; no files were changed.")
+    if digest == _V1_SHA256:
+        return "patched-v1", data
+    raise SamplingRepairError("Drama 3 sampler source differs from the verified versions; no files were changed.")
 
 
 def _verify_sidecars(source: Path) -> tuple[bool, bool]:
@@ -122,7 +153,7 @@ def _verify_sidecars(source: Path) -> tuple[bool, bool]:
         raise SamplingRepairError("The existing sampling backup is not the verified original; no files were changed.")
     if has_marker:
         try:
-            valid = marker.is_file() and json.loads(marker.read_text()) == _marker()
+            valid = marker.is_file() and json.loads(marker.read_text()) in (_marker(), _v1_marker())
         except (OSError, ValueError):
             valid = False
         if not valid:
@@ -131,7 +162,10 @@ def _verify_sidecars(source: Path) -> tuple[bool, bool]:
 
 
 def _result(status: str, data: bytes, version: str, changed: bool = False) -> dict:
-    return {"status": status, "changed": changed, "source_sha256": _sha256(data), "upstream_commit": PINNED_COMMIT, "version": version}
+    return {"status": status, "changed": changed, "source_sha256": _sha256(data),
+            "upstream_commit": PINNED_COMMIT, "version": version,
+            "repair_version": 2 if status == "patched" else 1 if status == "patched-v1" else 0,
+            "residual_codebook_size": RESIDUAL_CODEBOOK_SIZE}
 
 
 def check_live_sampling() -> dict:
@@ -184,24 +218,27 @@ def ensure_live_sampling() -> dict:
     with _repair_lock(prefix):
         status, data = _read_state(source)
         has_backup, has_marker = _verify_sidecars(source)
-        original = data if status == "original" else data.replace(_PATCHED_FRAGMENT, _ORIGINAL_FRAGMENT)
+        original = data if status == "original" else data.replace(
+            _V1_FRAGMENT if status == "patched-v1" else _PATCHED_FRAGMENT, _ORIGINAL_FRAGMENT)
         if _sha256(original) != _ORIGINAL_SHA256 or original.count(_ORIGINAL_FRAGMENT) != 1:
             raise SamplingRepairError("The verified sampling repair cannot be reconstructed safely.")
         patched = original.replace(_ORIGINAL_FRAGMENT, _PATCHED_FRAGMENT)
         if _sha256(patched) != _PATCHED_SHA256:
             raise SamplingRepairError("The sampling repair hash does not match the verified patch.")
-        if status == "original" and _MODULE in sys.modules:
+        if status != "patched" and _MODULE in sys.modules:
             raise SamplingRepairError("Restart before applying the sampling repair; its module is already imported.")
         backup, marker = _paths(source)
         if not has_backup:
             _write_atomic(backup, original, 0o600, replace=False)
         if not has_marker:
             _write_atomic(marker, (json.dumps(_marker(), sort_keys=True) + "\n").encode(), 0o600, replace=False)
-        if status == "original":
+        elif json.loads(marker.read_text()) == _v1_marker():
+            _write_atomic(marker, (json.dumps(_marker(), sort_keys=True) + "\n").encode(), 0o600, replace=True)
+        if status != "patched":
             _write_atomic(source, patched, stat.S_IMODE(source.stat().st_mode), replace=True)
         if _sha256(source.read_bytes()) != _PATCHED_SHA256:
             raise SamplingRepairError("Sampling repair verification failed after replacement.")
-        return _result("patched", patched, version, changed=status == "original")
+        return _result("patched", patched, version, changed=status != "patched")
 
 
 def restore_live_sampling() -> dict:

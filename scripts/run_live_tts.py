@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from live_voice.deployment import assigned_devices, profile
-from live_voice.drama_sampling import MAIN_TOP_K, RESIDUAL_TOP_K, REQUEST_SAMPLING, ensure_live_sampling
+from live_voice.drama_sampling import MAIN_TOP_K, RESIDUAL_TOP_K, RESIDUAL_CODEBOOK_SIZE, REQUEST_SAMPLING, ensure_live_sampling
 
 
 def render_overlay(base, tts):
@@ -30,7 +30,7 @@ def main():
     config=profile();devices=assigned_devices(config,os.environ.get('CUDA_VISIBLE_DEVICES',''))
     repair=ensure_live_sampling()
     print(f"Drama 3 sampling repair: {repair['status']}; main candidates {MAIN_TOP_K}; "
-          f"acoustic top-k {RESIDUAL_TOP_K}; temperature {REQUEST_SAMPLING['temperature']}; "
+          f"acoustic vocabulary {RESIDUAL_CODEBOOK_SIZE}; acoustic top-k {RESIDUAL_TOP_K}; temperature {REQUEST_SAMPLING['temperature']}; "
           f"top-p {REQUEST_SAMPLING['top_p']}; source {repair['source_sha256']}", flush=True)
     import vllm_omni
     base=Path(vllm_omni.__file__).parent/'deploy/fish_omni.yaml'

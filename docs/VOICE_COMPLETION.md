@@ -1,8 +1,8 @@
 # Whole-reply completion and consistent emotion
 
-Updated 29 October 2026. The current policy is one continuous voice take per complete reply, with one fixed emotion and reference. The earlier sentence-level natural-delivery retry was reported to create unwanted mood changes and has been removed. [Voice failure diagnosis](VOICE_FAILURES.md) describes the added recognition check, strict limited-take recovery and bounded adaptive retry. The real-model comparisons below describe the earlier cue-format tests, not a new validation of these recovery rules.
+Updated 5 November 2026. The current policy is one continuous voice take per complete reply, with one fixed emotion and reference. The earlier sentence-level natural-delivery retry was reported to create unwanted mood changes and has been removed. [Voice failure diagnosis](VOICE_FAILURES.md) describes word checks, conservative quiet-tail trimming and separate generation/checking timings. The real-model comparisons below describe the earlier cue-format tests, not validation of the current recovery rules or sampler.
 
-The later [sampling correction](DRAMA3_SAMPLING.md) changes the live runtime's main/acoustic top-k separation, following a failure mode documented by SGLang-Omni. Historical listening results below used the previous sampler; they do not validate the new policy.
+The later [sampling correction](DRAMA3_SAMPLING.md) separates main/acoustic top-k and masks residual codes outside the decoder's 1,024-entry vocabulary. Historical listening results below used the previous sampler; they do not validate the new policy.
 
 ## What failed
 
@@ -14,6 +14,7 @@ The old expressive chunker also merged short sentences into longer synthesis req
 
 - The director's selected delivery is snapshotted before actor generation. Operator changes apply to the next reply.
 - Actor text still streams to the transcript, but the app waits for the final text before calling TTS. The whole reply goes through one synthesis request with one speaker-prefixed descriptive cue. It is not split into independent sentence takes, which can vary their performance even with the same cue.
+- Paired Markdown emphasis and inline backtick wrappers are cleaned from the final spoken text without removing any words. The transcript, voice request and saved retry use the same final wording. Voice-generation and speech-checking stages have separate status labels and wall-time counters, including failures and retries.
 - The app collects the full take's SSE audio and terminal token-usage event before sending PCM. It validates 44.1 kHz mono PCM, alignment, size, complete events and clean end-of-stream. Uncapped takes receive the ordinary word-coverage check. A limited take can qualify only after exact normalized speech recognition and a strict quiet-tail check on the retained waveform; otherwise it stays blocked.
 - A rejected take is retried at most once with the **identical full text, cue, emotion and voice reference**. A larger token allowance is used only when ongoing speech and a clean recognized prefix support it. Long silent stalls do not receive extra time. This applies to plain replies too. No retry drops emotional instructions, changes voice, or substitutes natural delivery. If both attempts fail, the interface reports failure without playing either rejected take.
 - Temporary transport failures and HTTP 408/429/502/503/504 share that same one-retry budget, with a 250 ms pause before a transient-service retry. Configuration/format errors, other HTTP statuses and cancellation are not automatically retried. A mixed incomplete/service failure still gets at most two attempts.
@@ -40,6 +41,6 @@ GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull
 bash scripts/run_live_stack.sh --profile quality-3gpu
 ```
 
-No `--prepare` or model download is needed for this code change. Refresh the browser. The running `/api/status` should include `"voice_pipeline":"responsive-context-v4"` (the v3 whole-reply policy plus recognition preparation and conversation context); a newer static file alone does not confirm that the Python process was restarted. Test typed playback first, listen to all sentences as one take, then change emotion between replies and check Stop reply. No live listening check of v4 has been performed.
+If using experimental listening, append `--listening nemotron-smart-turn` to the restart command. No `--prepare` or model download is needed for this code change. Restart the full stack, including Drama 3, so its imported sampler is replaced. Refresh the browser. The running `/api/status` should include `"voice_pipeline":"voice-checked-v5"` and `"voice_progress":true`; a newer static file alone does not confirm that Python restarted. The TTS startup log must show `acoustic vocabulary 1024`. Test typed playback first, listen to all sentences as one take, then change emotion between replies and check Stop reply. No live listening check of v5 has been performed.
 
 Relevant files: `live_voice/voice.py`, `turns.py`, `providers.py`, `session.py`, `director.py`, `frontend/live.js`, `tests/test_phrase_chunker.py` and `tests/test_voice_generation.py`.

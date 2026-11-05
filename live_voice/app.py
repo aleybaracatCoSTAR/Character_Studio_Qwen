@@ -277,7 +277,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
     async def status():
         health = {"stt":False,"llm":False,"tts":False} if preview else await service_health()
         return {"preview":preview,"ready":all(health.values()),"services":health,
-                "voice_pipeline":"responsive-context-v4",
+                "voice_pipeline":"voice-checked-v5", "voice_progress":True,
                 "listening":{"mode":input_mode,'experimental':experimental is not None,
                              'input_asr':'Nemotron streaming 0.6B' if experimental is not None else 'Faster-Whisper base.en',
                              'turn_detector':'Smart Turn 3.2' if experimental is not None else 'VAD pause',

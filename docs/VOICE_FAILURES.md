@@ -1,8 +1,18 @@
 # Diagnosing an unfinished Drama 3 voice take
 
-**29 October sampling update:** the reported `600/600 tokens, 3/21 words matched` failure is consistent with a main-token top-k limitation explicitly documented in the SGLang-Omni cookbook. The live launcher now separates uncapped main-token sampling from top-30 acoustic heads in the existing pinned vLLM runtime. See the [source evidence, guarded correction and restart procedure](DRAMA3_SAMPLING.md). This targets generation itself; it does not weaken the completion checks or establish a successful real-model result.
+**5 November sampling update:** the live launcher now also masks residual audio-code IDs outside the decoder's 1,024-entry vocabulary. The pinned runtime otherwise samples from 4,096 logits and clamps invalid values during decoding. This is a confirmed source mismatch and a plausible contributor to garbled speech, not a proven explanation for the reported take. The previous uncapped-main/top-30-acoustic correction remains. See the [source evidence, guarded upgrade and restart procedure](DRAMA3_SAMPLING.md). Completion and word checks stay enabled; the correction needs a real-model listening test.
 
 `VoiceTakeIncomplete` means the app could not validate a complete spoken response. It does not identify the cause by itself, and it does not mean speech recognition or the character's text generation failed. The app buffers a whole reply while validating it, so a rejected take is not played as cut-off audio.
+
+## Generation, checking and delay
+
+The portal now distinguishes **Generating voice**, **Checking speech** and **Retrying voice**. Its timing line separates voice-generation wall time from local speech-checking time and reports the number of attempts. These totals include failed automatic attempts. **Model first bytes** measures the voice service's first PCM, not audible playback; the full take must still validate before delivery. Failed replies also retain safe timing counters.
+
+An error showing `34.0 s generated audio` describes waveform duration, not how long the participant waited. A `2/61 words matched` result is the recognizer's coverage score; without inspecting the audio, it does not prove exactly two words were audible. Names, accents and recognition mistakes can affect this check.
+
+Normal completed takes now use the same conservative quiet-tail analysis before recognition: only a clearly quiet suffix is removed, retaining 400 ms after speech. The trimmed candidate must pass the existing coverage check. Ambiguous endings are left intact, and disabling content verification also disables this trimming. This can reduce recognition and playback work on silent tails; it does not shorten the upstream generation that already happened.
+
+Paired presentation emphasis and inline backticks are removed before synthesis without changing words, quotes or their order. For the reported archive passage, all 61 normalized words remain. The final displayed reply, submitted voice text and saved retry wording use this same cleaned text. The Female setting already sends the same bundled reference recording on every turn; rejected generations never replace it. Emotion is still fixed for a whole reply. A fixed reference and cue guide the model but cannot guarantee identical acoustic delivery.
 
 ## Find the reason
 
@@ -58,4 +68,4 @@ Voice checking is enabled by default in the live app. `LIVE_VOICE_VERIFY_TIMEOUT
 
 Automatic voice anchoring accepts only a whole take lasting 1–30 seconds, matching the pinned upstream reference-duration rule. Shorter or longer audio is not cropped with a now-incorrect transcript and is not promoted as the next request's reference. The app waits for a suitable later take; built-in Female/Male and validated uploaded references retain their selected conditioning.
 
-No live GPU synthesis was performed for these updates. The later sampling diagnosis identifies a concrete runtime setting consistent with the reported first-phrase stall, but it still needs a real-model listening check. The corrected duration bound is not evidence that every failure came from that bound.
+No live GPU synthesis was performed for the 5 November changes. CPU fixtures establish transport, masking, text preservation and rejection behavior, not voice quality or a measured latency improvement. The reported 34-second, 2-of-61 case remains blocked in a regression fixture after both same-delivery attempts.

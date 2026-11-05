@@ -12,7 +12,7 @@ import numpy as np
 
 from live_voice.deployment import profile
 from live_voice.director import DirectorSettings
-from live_voice.drama_sampling import REQUEST_SAMPLING
+from live_voice.drama_sampling import REQUEST_SAMPLING, RESIDUAL_CODEBOOK_SIZE
 from live_voice.inspection import RequestInspection
 from live_voice.providers import LocalProviders
 from live_voice.voice import VoiceSettings
@@ -140,6 +140,7 @@ class DramaRequestSamplingTests(unittest.IsolatedAsyncioTestCase):
 class DramaDeploymentSamplingTests(unittest.TestCase):
     def test_sampling_constants_match_the_supported_runtime_contract(self):
         self.assertEqual(dict(REQUEST_SAMPLING),EXPECTED)
+        self.assertEqual(RESIDUAL_CODEBOOK_SIZE,1024)
 
     def test_overlay_changes_only_the_intended_main_sampler_and_keeps_each_profile_gpu_budget(self):
         runner=importlib.import_module('scripts.run_live_tts')

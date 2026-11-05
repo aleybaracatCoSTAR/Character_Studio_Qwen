@@ -23,6 +23,7 @@ from .inspection import record_request
 from .drama_sampling import REQUEST_SAMPLING
 from .voice_coverage import resample_for_recognition, compare_speech, spoken_text, normalized_prefix
 from .voice_tail import analyze_tail, trim_tail
+from .voice_progress import report_voice_progress
 
 OUTPUT_RATE = 44100
 MAX_VOICE_PCM_BYTES = 8 * 1024 * 1024
@@ -40,7 +41,7 @@ _VOICE_NUMERIC_FIELDS = frozenset(('budget_tokens', 'output_tokens', 'audio_byte
     'audio_seconds', 'audio_limit_bytes', 'events', 'elapsed_ms', 'sample_rate', 'channels',
     'pending_event_chars', 'http_status', 'attempt', 'attempts', 'verification_ms',
     'expected_words', 'heard_words', 'matched_words', 'coverage', 'trailing_silence_ms',
-    'total_samples', 'voiced_ms', 'last_non_silent_sample', 'trimmed_audio_seconds',
+    'total_samples', 'voiced_ms', 'last_non_silent_sample', 'trimmed_audio_seconds', 'first_audio_ms',
     'removed_silence_ms', 'next_budget_tokens'))
 _VOICE_ENUM_FIELDS = {
     'finish_reason': frozenset(('stop', 'length', 'eos', 'abort', 'cancelled', 'unknown', 'not_reported')),
@@ -248,6 +249,7 @@ class LocalProviders:
         self.verify_voice = bool(verify_voice)
         self.verification_timeout = max(2,min(60,float(verification_timeout)))
         self.last_voice_check = None
+        self.last_voice_metrics = {}
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(120, connect=3), transport=transport)
 
     async def health(self):
@@ -371,6 +373,8 @@ class LocalProviders:
                             raise VoiceTakeIncomplete('Drama 3 returned malformed voice audio.', reason='malformed_audio') from exc
                         stats['audio_chunks'] += 1
                         stats['audio_bytes'] = len(pcm)
+                        if pcm and 'first_audio_ms' not in stats:
+                            stats['first_audio_ms'] = round((time.perf_counter()-started)*1000)
                         if len(pcm) > limit:
                             raise VoiceTakeIncomplete('Voice phrase exceeded the live audio limit.', reason='audio_limit')
                     elif kind == 'speech.audio.done':
@@ -414,6 +418,9 @@ class LocalProviders:
                 'audio_seconds':round(len(pcm)/(2*OUTPUT_RATE),3),
                 'elapsed_ms':round((time.perf_counter()-started)*1000)})
             raise
+        finally:
+            if 'first_audio_ms' in stats:
+                self.last_voice_metrics['first_audio_ms'] = stats['first_audio_ms']
 
     async def check_spoken_reply(self, text, pcm, *, enforce=True):
         if not self.verify_voice: return
@@ -428,6 +435,8 @@ class LocalProviders:
         except Exception:
             raise VoiceProtocolError('The generated speech could not be checked.', reason='verification_unavailable',
                 metadata={'verification_ms':round((time.perf_counter()-started)*1000)}) from None
+        finally:
+            self.last_voice_metrics['verification_ms'] = self.last_voice_metrics.get('verification_ms',0) + round((time.perf_counter()-started)*1000)
         metadata = {'verification_ms':round((time.perf_counter()-started)*1000),
                     'expected_words':report.expected_words,'heard_words':report.heard_words,
                     'matched_words':report.matched_words,'coverage':round(report.coverage,3),
@@ -448,14 +457,25 @@ class LocalProviders:
         # Freeze a caller's mutable reference before the first attempt. Incomplete
         # takes and service failures share one retry, never nested retry loops.
         reference = tuple(reference) if reference else reference
+        self.last_voice_metrics = {'attempt':0,'synthesis_ms':0,'verification_ms':0}
         budget = speech_token_budget(text)
         for attempt in range(2):
+            self.last_voice_metrics['attempt'] = attempt + 1
+            self.last_voice_metrics.pop('first_audio_ms',None)
+            await report_voice_progress('generating',attempt=attempt+1)
             transient = False
             pcm = take = None
+            trim_metadata = {}
             retry_budget = budget
             self.last_voice_check = None
             try:
-                take = await self._voice_take(text, reference, token_budget=budget)
+                generation_started = time.perf_counter()
+                try:
+                    take = await self._voice_take(text, reference, token_budget=budget)
+                finally:
+                    self.last_voice_metrics['synthesis_ms'] += round((time.perf_counter()-generation_started)*1000)
+                if 'first_audio_ms' in take.metadata:
+                    self.last_voice_metrics['first_audio_ms'] = take.metadata['first_audio_ms']
                 pcm = take.pcm
                 if take.limited:
                     metadata = dict(take.metadata)
@@ -469,6 +489,7 @@ class LocalProviders:
                         # either rescue or a longer retry. Avoid ASR on silence.
                         if tail.clean_ending or active:
                             checked_pcm = trim_tail(pcm, tail) if tail.clean_ending else pcm
+                            await report_voice_progress('checking',**self.last_voice_metrics)
                             report = await self.check_spoken_reply(text, checked_pcm, enforce=False)
                             metadata.update(self.last_voice_check or {})
                             complete = (report is not None and report.expected_words > 0
@@ -493,15 +514,26 @@ class LocalProviders:
                         raise VoiceTakeIncomplete('Drama 3 reached the voice generation limit.',
                                                   reason='token_limit', metadata=metadata)
                 else:
+                    # A normal EOS can also leave a long quiet tail. Remove
+                    # only the strict verified-silence candidate before ASR;
+                    # the requested words must still pass the same check.
+                    if self.verify_voice:
+                        tail = analyze_tail(pcm)
+                        if tail.clean_ending:
+                            candidate = trim_tail(pcm,tail)
+                            if len(candidate) < len(pcm):
+                                trim_metadata = {'trimmed_audio_seconds':round(len(candidate)/(2*OUTPUT_RATE),3),
+                                    'removed_silence_ms':round((len(pcm)-len(candidate))*1000/(2*OUTPUT_RATE),3)}
+                                pcm = candidate
+                    await report_voice_progress('checking',**self.last_voice_metrics)
                     await self.check_spoken_reply(text, pcm)
+                    if self.last_voice_check is not None:
+                        self.last_voice_check = {**take.metadata,**self.last_voice_check,**trim_metadata}
             except VoiceFailure as exc:
                 if take is not None:
-                    if take.limited: exc.add_metadata(**take.metadata)
-                    else:
-                        # Preserve the established diagnostics for ordinary
-                        # complete takes rejected by the word-coverage check.
-                        exc.add_metadata(budget_tokens=budget, audio_bytes=len(take.pcm),
-                                         audio_seconds=round(len(take.pcm)/(2*OUTPUT_RATE),3))
+                    transport = take.metadata if take.limited else {
+                        key:value for key,value in take.metadata.items() if type(value) in (int,float,bool)}
+                    exc.add_metadata(**transport,**trim_metadata)
                 exc.add_metadata(attempt=attempt+1, attempts=attempt+1)
                 logger.warning('Voice take failed: %s', json.dumps(exc.diagnostic(), sort_keys=True))
                 if not isinstance(exc, VoiceTakeIncomplete) or attempt:
@@ -547,12 +579,14 @@ class LocalProviders:
                 break
             if on_notice is not None: await on_notice(message)
             else: logger.warning(message)
+            await report_voice_progress('retrying',**{**self.last_voice_metrics,'attempt':attempt+2})
             if transient: await asyncio.sleep(.25)
             # Failed raw candidates belong only to this attempt, never to a
             # reusable exception, session retry cache or model-input inspector.
             pcm = take = None
         # Send every retained sample unchanged; only a strictly verified quiet
         # suffix can have been removed above. WebSocket packets stay bounded.
+        await report_voice_progress('ready',**self.last_voice_metrics)
         for start in range(0, len(pcm), 16384):
             yield pcm[start:start + 16384]
 

@@ -658,7 +658,9 @@ class LiveAPITests(unittest.TestCase):
     def test_status_identifies_the_loaded_voice_pipeline(self):
         app=create_app(preview=True,providers=FakeProviders())
         with TestClient(app) as client:
-            self.assertEqual(client.get('/api/status').json()['voice_pipeline'],'responsive-context-v4')
+            status = client.get('/api/status').json()
+            self.assertEqual(status['voice_pipeline'],'voice-checked-v5')
+            self.assertTrue(status['voice_progress'])
 
     def test_live_delivery_and_trigger_controls_reach_the_next_answer(self):
         providers=FakeProviders()

@@ -153,7 +153,10 @@ class SamplingRepairTests(unittest.TestCase):
     def test_constants_and_fixture_match_exact_upstream_hash(self):
         self.assertEqual(sampling.REQUEST_SAMPLING, {"temperature": 1.0, "top_p": 0.9, "top_k": 0})
         self.assertEqual((sampling.MAIN_TOP_K, sampling.RESIDUAL_TOP_K), (4096, 30))
+        self.assertEqual(sampling.RESIDUAL_CODEBOOK_SIZE, 1024)
         self.assertEqual(hashlib.sha256(ORIGINAL).hexdigest(), sampling._ORIGINAL_SHA256)
+        v1 = ORIGINAL.replace(sampling._ORIGINAL_FRAGMENT, sampling._V1_FRAGMENT)
+        self.assertEqual(hashlib.sha256(v1).hexdigest(), sampling._V1_SHA256)
         patched = ORIGINAL.replace(sampling._ORIGINAL_FRAGMENT, sampling._PATCHED_FRAGMENT)
         self.assertEqual(hashlib.sha256(patched).hexdigest(), sampling._PATCHED_SHA256)
         self.assertEqual(ORIGINAL.count(sampling._ORIGINAL_FRAGMENT), 1)
@@ -184,6 +187,73 @@ class SamplingRepairTests(unittest.TestCase):
         self.assertEqual(first_stats, [p.stat().st_mtime_ns for p in (self.source, backup, marker)])
         self.assertEqual(sampling.check_live_sampling()["status"], "patched")
         self.assertFalse(list(self.source.parent.glob(".character-studio-sampling-*")))
+
+    def test_v1_source_and_marker_upgrade_preserve_the_original_backup(self):
+        v1 = ORIGINAL.replace(sampling._ORIGINAL_FRAGMENT, sampling._V1_FRAGMENT)
+        self.source.write_bytes(v1)
+        backup, marker = sampling._paths(self.source)
+        backup.write_bytes(ORIGINAL)
+        marker.write_text(json.dumps(sampling._v1_marker()))
+        before = backup.stat().st_mtime_ns
+        self.assertEqual(sampling.check_live_sampling()['status'], 'patched-v1')
+        result = sampling.ensure_live_sampling()
+        self.assertTrue(result['changed'])
+        self.assertEqual(result['repair_version'], 2)
+        self.assertEqual(backup.read_bytes(), ORIGINAL)
+        self.assertEqual(backup.stat().st_mtime_ns, before)
+        self.assertEqual(json.loads(marker.read_text()), sampling._marker())
+        self.assertEqual(hashlib.sha256(self.source.read_bytes()).hexdigest(), sampling._PATCHED_SHA256)
+        self.assertFalse(sampling.ensure_live_sampling()['changed'])
+        sampling.restore_live_sampling()
+        self.assertEqual(self.source.read_bytes(), ORIGINAL)
+
+    def test_v1_without_sidecars_can_reconstruct_only_the_verified_original(self):
+        self.source.write_bytes(ORIGINAL.replace(sampling._ORIGINAL_FRAGMENT, sampling._V1_FRAGMENT))
+        self.assertTrue(sampling.ensure_live_sampling()['changed'])
+        backup, marker = sampling._paths(self.source)
+        self.assertEqual(backup.read_bytes(), ORIGINAL)
+        self.assertEqual(json.loads(marker.read_text()), sampling._marker())
+
+    def test_v1_restore_works_without_applying_v2_first(self):
+        self.source.write_bytes(ORIGINAL.replace(sampling._ORIGINAL_FRAGMENT, sampling._V1_FRAGMENT))
+        backup, marker = sampling._paths(self.source)
+        backup.write_bytes(ORIGINAL)
+        marker.write_text(json.dumps(sampling._v1_marker()))
+        self.assertTrue(sampling.restore_live_sampling()['changed'])
+        self.assertEqual(self.source.read_bytes(), ORIGINAL)
+
+    def test_failed_v1_upgrade_can_resume_without_overwriting_its_backup(self):
+        v1 = ORIGINAL.replace(sampling._ORIGINAL_FRAGMENT, sampling._V1_FRAGMENT)
+        self.source.write_bytes(v1)
+        backup, marker = sampling._paths(self.source)
+        backup.write_bytes(ORIGINAL)
+        marker.write_text(json.dumps(sampling._v1_marker()))
+        real_replace = sampling.os.replace
+        def replace(src, dst):
+            if Path(dst).resolve() == self.source.resolve(): raise OSError('source replacement unavailable')
+            return real_replace(src, dst)
+        with patch.object(sampling.os, 'replace', side_effect=replace):
+            with self.assertRaises(OSError): sampling.ensure_live_sampling()
+        self.assertEqual(self.source.read_bytes(), v1)
+        self.assertEqual(backup.read_bytes(), ORIGINAL)
+        # A metadata upgrade that completed before source replacement is safe to resume.
+        self.assertEqual(json.loads(marker.read_text()), sampling._marker())
+        self.assertEqual(sampling.check_live_sampling()['status'], 'patched-v1')
+        self.assertTrue(sampling.ensure_live_sampling()['changed'])
+
+    def test_v1_hardlinked_cache_and_imported_module_are_protected_during_upgrade(self):
+        v1 = ORIGINAL.replace(sampling._ORIGINAL_FRAGMENT, sampling._V1_FRAGMENT)
+        self.source.write_bytes(v1)
+        cache = self.root / 'uv-cache-v1'
+        os.link(self.source, cache)
+        with patch.dict(sys.modules, {sampling._MODULE: object()}):
+            with self.assertRaisesRegex(sampling.SamplingRepairError, 'already imported'):
+                sampling.ensure_live_sampling()
+        self.assertEqual(self.source.read_bytes(), v1)
+        self.assertFalse(any(p.exists() for p in sampling._paths(self.source)))
+        self.assertTrue(sampling.ensure_live_sampling()['changed'])
+        self.assertEqual(cache.read_bytes(), v1)
+        self.assertNotEqual(cache.stat().st_ino, self.source.stat().st_ino)
 
     def test_restore_uses_verified_backup_and_can_be_applied_again(self):
         sampling.ensure_live_sampling()
@@ -342,6 +412,10 @@ class SamplingRepairTests(unittest.TestCase):
             def any(self, dim): return False
         class Noise:
             def __getitem__(self, key): return key
+        class Logits:
+            def clone(self): return self
+            def __setitem__(self, key, value):
+                self.mask = (key, value)
         def draw(*args):
             calls.append(args)
             return Number(117)
@@ -357,12 +431,66 @@ class SamplingRepairTests(unittest.TestCase):
         instance.ras_top_p = [.95]
         top_k = Number(4096)
         instance.main_tokens(SimpleNamespace(shape=(1, 4096)), object(), Window(), 1.0, top_k, .9, Noise(), 100, 4096)
-        instance.code(object(), 1.0, top_k, .9, Noise(), 0)
+        logits = Logits()
+        instance.code(logits, 1.0, top_k, .9, Noise(), 0)
         self.assertEqual(calls[0][2], 4096)
         self.assertIs(calls[0][2], top_k)
         self.assertEqual(calls[0][5], 4096)
         self.assertEqual(calls[-1][2], 30)
         self.assertEqual(calls[-1][5], 4096)
+        self.assertEqual(logits.mask, ((Ellipsis, slice(1024,None)), float('-inf')))
+
+    def test_actual_residual_draw_masks_invalid_ids_without_shrinking_captured_shapes(self):
+        """Execute the pinned methods with adversarial logits and a CPU tensor spy.
+
+        vLLM's 4096-wide head and candidate/noise capacity stay intact. The codec
+        accepts only IDs 0–1023, so raising every later logit must not let one
+        win. No Torch import or model is involved.
+        """
+        sampling.ensure_live_sampling()
+        def code_method(source):
+            cls = next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef))
+            fn = next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='code')
+            tree = ast.Module(body=[ast.ClassDef(name='Sampler',bases=[],keywords=[],
+                body=[fn],decorator_list=[])],type_ignores=[])
+            return compile(ast.fix_missing_locations(tree),'<pinned-residual-draw>','exec')
+        class Tensor:
+            def __init__(self, values):
+                self.values = list(values)
+                self.shape = (1,len(self.values))
+            def clone(self): return Tensor(self.values)
+            def __setitem__(self, key, value):
+                self.assert_key = key
+                for i in range(*key[1].indices(len(self.values))): self.values[i] = value
+        class TopK(int):
+            def clamp(self, *, max): return TopK(min(self,max))
+        class Noise:
+            def __getitem__(self, key):
+                assert key == (slice(None),2)
+                return SimpleNamespace(shape=(1,4096))
+        draws = []
+        def draw(logits,temperature,top_k,top_p,noise,capacity):
+            self.assertEqual(logits.shape, (1,4096))
+            self.assertEqual(noise.shape, (1,4096))
+            self.assertEqual(capacity, 4096)
+            draws.append((logits,int(top_k)))
+            return max(range(4096),key=logits.values.__getitem__)
+        # Every invalid code has a larger logit than every legal code.
+        logits = Tensor(range(4096))
+        results = []
+        for source in (ORIGINAL.decode(),
+                       ORIGINAL.replace(sampling._ORIGINAL_FRAGMENT,sampling._V1_FRAGMENT).decode(),
+                       self.source.read_text()):
+            scope = {'torch':SimpleNamespace(Tensor=object),'draw_top_k_top_p':draw}
+            exec(code_method(source),scope)
+            sampler = scope['Sampler'](); sampler.max_top_k=4096; sampler.NUM_DRAWS_EXTRA=2
+            results.append(sampler.code(logits,1.0,TopK(4096),.9,Noise(),0))
+        self.assertEqual(results, [4095,4095,1023])
+        masked,top_k = draws[-1]
+        self.assertEqual(top_k,30)
+        self.assertEqual(masked.values[:1024],list(range(1024)))
+        self.assertTrue(all(value==float('-inf') for value in masked.values[1024:]))
+        self.assertEqual(logits.values,list(range(4096)))
 
 
 if __name__ == "__main__":

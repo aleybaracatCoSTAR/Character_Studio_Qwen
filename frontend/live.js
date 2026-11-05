@@ -8,6 +8,7 @@ import {CallFeedback} from './live-feedback.mjs';
 import {CharacterLibrary} from './live-characters.mjs';
 import {ArchivePanel} from './live-archive.mjs';
 import {ListeningFeedback} from './live-listening.mjs';
+import {VoiceProgress} from './live-voice-progress.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const archivePage=location.pathname.startsWith('/archive');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
@@ -30,15 +31,19 @@ const directorPanel=new DirectorPanel({button:$('toggle-director'),content:$('di
   summary:$('director-summary'),empty:$('director-empty')});
 const voiceRetry=new VoiceRetry({button:$('retry-voice'),send,
   canRetry:()=>sessionReady&&socket?.readyState===WebSocket.OPEN,
-  onRetry:()=>{holdMicrophone();feedback();state('Retrying voice… · Mic paused');},
-  onUnavailable:data=>{feedback(data.message);resumeMicrophone();},
-  onError:data=>{feedback(data.message);playback?.clear();resumeMicrophone();}});
+  onRetry:()=>{voiceProgress.begin(currentTurn);holdMicrophone();feedback();state('Retrying voice… · Mic paused');},
+  onUnavailable:data=>{voiceProgress.finish(currentTurn);feedback(data.message);resumeMicrophone();},
+  onError:data=>{voiceProgress.finish(currentTurn);feedback(data.message);playback?.clear();resumeMicrophone();}});
 function directorSettings(){return {enabled:$('director-enabled').checked,notes:$('director-input').value};}
 function triggerSettings(){return $('trigger-enabled').checked?{
   action:$('trigger-action').value,condition:$('trigger-condition').value,emotion:$('trigger-emotion').value,
   behaviour:$('trigger-behaviour').value,spoken_cue:$('trigger-cue').value,delivery:$('trigger-delivery').value
 }:null;}
 const replies=conversation.replies;
+const voiceProgress=new VoiceProgress({onState:state,onTiming:text=>{$('timing').textContent=text;},onText:text=>{
+  if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
+  replies.get(currentTurn).content.textContent=text;$('messages').scrollTop=$('messages').scrollHeight;
+}});
 let storyView=null;
 const storyEditor=new StoryEditor($('beat-editor'),saveStory);
 function narrativeSettings(){return {enabled:$('story-enabled').checked,mode:$('story-mode').value,beats:storyEditor.values()};}
@@ -111,7 +116,7 @@ function applyProfile(profile){
     clearReference();updateVoicePreset();
     $('chat-title').textContent=`Talk to ${profile.character.name.trim()||'your character'}`;
     clearTimeout(resumeTimer);replyPending=false;currentTurn=0;triggerActive=false;
-    playback?.clear();conversation.reset();inspector.reset();voiceRetry.clear();directorPanel.resetNote();
+    playback?.clear();conversation.reset();inspector.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();
     if($('model-inspector').open)$('model-inspector').close();
     $('director-latest').hidden=true;$('director-note').textContent='';$('timing').textContent='';
     $('typed-form').hidden=true;$('typed-message').value='';$('trigger-state').textContent='Start a call to test the reaction.';
@@ -183,6 +188,7 @@ async function disconnect(){
   archivePanel.resetSources();
   listeningFeedback.reset();
   voiceRetry.clear();
+  voiceProgress.clear();
   callFeedback.clearVoiceNotice();
   clearTimeout(resumeTimer);replyPending=false;sessionReady=false;triggerActive=false;controls();
   $('trigger-state').textContent='Start a call to test the reaction.';
@@ -217,15 +223,16 @@ function event(data){
   if(data.type==='ready'){listeningFeedback.setMode(data.listening_mode);sessionReady=true;inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
-  if(data.type==='turn_start'){listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
+  if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
   if(data.type==='interrupted'){
-    if(data.turn_id===currentTurn){voiceRetry.clear();playback.clear();resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
+    if(data.turn_id===currentTurn){voiceProgress.finish(currentTurn);voiceRetry.clear();playback.clear();resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
     return;
   }
   if(data.type==='error'){voiceRetry.handleError(data,currentTurn);return;}
   if(data.type==='voice_retry_unavailable'){voiceRetry.handleUnavailable(data,currentTurn);return;}
   if(data.type==='empty_transcript'){feedback('I did not catch that. Try again.');resumeMicrophone();return;}
   if(data.turn_id!==currentTurn)return;
+  if(data.type==='text_done'||data.type==='voice_progress'){voiceProgress.accept(data);return;}
   if(data.type==='voice_notice'){feedback(data.message,'voice_notice');return;}
   if(data.type==='phrase_start'){state('Preparing the whole reply… · Mic paused');return;}
   if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.display_text??data.text,'user');state($('director-enabled').checked?'Directing the next reply… · Mic paused':$('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
@@ -235,6 +242,7 @@ function event(data){
   }
   if(data.type==='phrase_done')playback.phraseDone(data.seq);
   if(data.type==='response_done'){
+    voiceProgress.finish(currentTurn);
     callFeedback.clearVoiceNotice();
     voiceRetry.clear();
     if(data.partial&&replies.has(currentTurn)){
@@ -242,7 +250,7 @@ function event(data){
     }
     playback.responseDone();
   }
-  if(data.type==='metrics')$('timing').textContent=`Server estimate to first audio: ${data.speech_end_to_first_audio_ms} ms · Final pause: ${data.endpoint_ms} ms · Recognition wait: ${data.stt_ms} ms${data.streaming_asr?' (Nemotron streaming)':data.recognition_prepared?' (started during pause)':''}${data.endpoint_reason?' · Endpoint: '+data.endpoint_reason:''} · Director: ${data.director_ms??data.context_check_ms??0} ms · Reply text: ${data.llm_total_ms??data.llm_first_token_ms} ms · Complete voice take: ${data.tts_first_chunk_ms} ms`;
+  if(data.type==='metrics')voiceProgress.accept(data);
 }
 async function connect(useMic=true){
   if(connecting)return;if(socket){await disconnect();return;}if(!form.reportValidity())return;
@@ -253,7 +261,7 @@ async function connect(useMic=true){
   }
   connecting=true;feedback();controls();
   try{
-    conversation.reset();inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
+    conversation.reset();inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}

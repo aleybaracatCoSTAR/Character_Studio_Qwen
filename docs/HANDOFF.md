@@ -1,4 +1,16 @@
-# Latest change: batch-step CPU affinity, 5 November 2026
+# Latest change: residual voice-code vocabulary and preparation timings, 5 November 2026
+
+The user reports a Female-reference archive reply failing with 34 seconds of generated waveform and 2/61 words matched, plus a long wait and variable delivery. Female already sends one fixed bundled reference per turn; no reference switch was found. The waveform duration is not wall time, and recognition coverage alone does not establish the exact audible words. All 61 normalized words in the supplied quoted passage are retained.
+
+`drama_sampling.py` now upgrades original or recognized v1 source to a v2 sampler that masks residual logits above code ID 1023, preserving the 4096-wide tensor required by its sampling kernel. The pinned runtime's residual head exposes 4096 logits while its DAC codebook has 1024 entries; the decoder clamps invalid codes. CPU execution of the exact pinned methods reproduces the invalid v1 draw and its prevention by v2. Main-token sampling is unchanged, acoustic top-k remains 30, and the original-byte backup/atomic replacement/unknown-source refusal remain. See [hashes, evidence and restart](DRAMA3_SAMPLING.md). This fixes a concrete source mismatch, not a proven cause of this particular acoustic failure.
+
+The final actor reply is cleaned only of clearly paired presentation emphasis/inline-code wrappers; words, quote content, emotion and reference remain intact. A `text_done` event aligns the displayed text, saved retry and voice payload. Normal EOS takes can now remove a strictly quiet suffix before the same recognition check, retaining 400 ms; uncertain endings and content-check opt-out are untouched. Both failed attempts in the 34-second/2-of-61 fixture release zero PCM. No sentence splitting, natural-delivery fallback, unchecked streaming or extra attempts were added.
+
+Task-local `voice_progress` events expose generating/checking/retrying/ready stages. Numeric wall times distinguish synthesis, verification and model first bytes, including failures; first bytes are not first audible playback. The frontend ignores stale progress, clears timing on new turns/retries and leaves microphone/playback ownership unchanged. `/api/status` identifies `voice_pipeline: voice-checked-v5` and `voice_progress: true`. Restart the full stack, including TTS, and refresh the browser. Dependencies, checkpoints, GPU placement and optional Nemotron listening are unchanged.
+
+All **599 Python and 148 JavaScript tests pass locally**, including source guards, adversarial residual sampling, the exact 61-word passage, quiet-tail preservation, immutable retries, progress/cancellation, heard-history acknowledgement and UI phase ordering. No new GPU synthesis/listening result or measured latency improvement was obtained for this change. A same-passage Female check after restart is still required; the running v4 server does not contain this sampler update.
+
+# Previous change: batch-step CPU affinity, 5 November 2026
 
 Surrey batch job 80315 reached `costar07` but its first `srun` step failed with `CPU binding outside of job step allocation` / `Unable to satisfy cpu bind request`, before the live launcher or any model started. The user submitted from a `costar07` shell and subsequently showed a separate running interactive job, 80203. An inherited mask from the older allocation is a plausible cause; the provided log alone cannot distinguish it from site automatic-binding policy.
 

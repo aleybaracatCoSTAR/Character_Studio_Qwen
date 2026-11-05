@@ -10,7 +10,8 @@ from .director import DirectorSettings
 from .narrative import NarrativeState
 from .recognition import PreparedRecognition
 from .inspection import RequestInspection
-from .voice import EMOTION_DIRECTIONS
+from .voice import EMOTION_DIRECTIONS, spoken_text_clean
+from .voice_progress import observe_voice_progress, voice_timing_metrics
 from .turns import ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
 from .archive import retrieve, grounding_messages
@@ -402,8 +403,9 @@ class LiveSession:
                 answer.append(delta)
                 await self.send_json({"type":"text_delta", "turn_id":turn_id, "text":delta})
             metrics["llm_total_ms"] = round((time.perf_counter() - llm_started) * 1000)
-            reply = "".join(answer).strip()
+            reply = spoken_text_clean("".join(answer)).strip()
             if not reply: raise RuntimeError("The text model returned no spoken reply.")
+            await self.send_json({'type':'text_done','turn_id':turn_id,'text':reply})
 
             # One utterance gives Drama 3 the whole reply's prosody. Repeated
             # sentence requests can drift even with identical emotion labels.
@@ -428,15 +430,19 @@ class LiveSession:
         audio_bytes = audio_chunks = 0
         async def voice_notice(message):
             await self.send_json({"type":"voice_notice", "turn_id":turn_id, "seq":0, "message":message})
-        async for chunk in self.providers.audio(take['speech'], take['reference'], on_notice=voice_notice):
-            take['audio_started'] = True
-            if "tts_first_chunk_ms" not in metrics:
-                metrics["tts_first_chunk_ms"] = round((time.perf_counter() - tts_started) * 1000)
-                metrics["speech_end_to_first_audio_ms"] = round((time.perf_counter() - started) * 1000)
-                await self.send_json({"type":"metrics", "turn_id":turn_id, **metrics})
-            if take['reference'] is None: reference_audio.extend(chunk)
-            audio_bytes += len(chunk); audio_chunks += 1
-            await self.send_bytes(struct.pack("!II", turn_id, 0) + chunk)
+        async def voice_progress(event):
+            await self.send_json({'type':'voice_progress','turn_id':turn_id,**event})
+        with observe_voice_progress(voice_progress):
+            async for chunk in self.providers.audio(take['speech'], take['reference'], on_notice=voice_notice):
+                take['audio_started'] = True
+                if "tts_first_chunk_ms" not in metrics:
+                    metrics.update(voice_timing_metrics(getattr(self.providers,'last_voice_metrics',None)))
+                    metrics["tts_first_chunk_ms"] = round((time.perf_counter() - tts_started) * 1000)
+                    metrics["speech_end_to_first_audio_ms"] = round((time.perf_counter() - started) * 1000)
+                    await self.send_json({"type":"metrics", "turn_id":turn_id, **metrics})
+                if take['reference'] is None: reference_audio.extend(chunk)
+                audio_bytes += len(chunk); audio_chunks += 1
+                await self.send_bytes(struct.pack("!II", turn_id, 0) + chunk)
         if take['reference'] is None and reference_audio:
             self.reference = synthetic_reference(bytes(reference_audio), reply)
             if self.reference is None:
@@ -455,6 +461,8 @@ class LiveSession:
         diagnostic = voice_failure.diagnostic() if voice_failure else None
         if diagnostic:
             logger.warning('Live voice failed: %s', json.dumps(diagnostic, sort_keys=True))
+            timings = voice_timing_metrics(getattr(self.providers,'last_voice_metrics',None))
+            if timings: await self.send_json({'type':'metrics','turn_id':turn_id,'voice_failed':True,**timings})
         else:
             logger.warning("Live turn failed (%s); inspect the local model service logs.", type(exc).__name__)
         self.reply_pending = False

@@ -3,6 +3,7 @@ import base64
 import binascii
 from pathlib import Path
 from io import BytesIO
+import re
 from typing import Literal
 import wave
 
@@ -21,6 +22,43 @@ EMOTION_DIRECTIONS = {
     "calm":"gentle, unhurried, reassuring delivery",
     "whisper":"quiet intimate whisper",
 }
+
+_INLINE_CODE = re.compile(
+    r'(?<![\w`\\])(?P<mark>`{1,3})(?!`)(?=\S)(?P<body>[^\r\n]+?)(?<=\S)(?<![`\\])(?P=mark)(?![\w`])')
+_EMPHASIS = (
+    re.compile(r'(?<![\w*\\])(?P<mark>\*{1,3})(?!\*)(?=\S)(?P<body>[^\r\n]+?)(?<=\S)(?<![*\\])(?P=mark)(?![\w*])'),
+    re.compile(r'(?<![\w_\\])(?P<mark>_{1,3})(?!_)(?=\S)(?P<body>[^\r\n]+?)(?<=\S)(?<![_\\])(?P=mark)(?![\w_])'),
+)
+
+
+def spoken_text_clean(text):
+    """Remove clear paired presentation wrappers without rewriting the words.
+
+    This is deliberately narrower than a Markdown renderer: footnotes, links,
+    unpaired markers, identifiers and math such as 2*3 are not interpreted.
+    Pairs must surround non-space text at word boundaries on one line. Inline
+    code loses its backticks but its contents stay literal, including asterisks.
+    Quotations, apostrophes, Unicode and whitespace are otherwise unchanged.
+    """
+    if not isinstance(text, str): raise ValueError('Use text for the spoken reply.')
+    protected = []
+    sentinel = '\ue000'
+    while sentinel in text: sentinel += '\ue000'
+
+    def protect(match):
+        protected.append(match.group('body'))
+        return f'{sentinel}{len(protected)-1}{sentinel}'
+
+    cleaned = _INLINE_CODE.sub(protect, text)
+    while True:
+        previous = cleaned
+        for pattern in _EMPHASIS:
+            cleaned = pattern.sub(lambda match:match.group('body'), cleaned)
+        if cleaned == previous: break
+    if protected:
+        placeholder = re.compile(re.escape(sentinel) + r'(\d+)' + re.escape(sentinel))
+        cleaned = placeholder.sub(lambda match:protected[int(match.group(1))], cleaned)
+    return cleaned
 
 
 class Delivery(BaseModel):
