@@ -5,7 +5,7 @@ import {PromptInspector} from './live-inspector.mjs';
 import {VoiceRetry} from './live-voice-retry.mjs';
 import {DirectorPanel} from './live-director-panel.mjs';
 import {CallFeedback} from './live-feedback.mjs';
-import {CharacterLibrary} from './live-characters.mjs';
+import {CharacterLibrary,legacyRecoveryProfiles} from './live-characters.mjs';
 import {ArchivePanel} from './live-archive.mjs';
 import {ListeningFeedback} from './live-listening.mjs';
 import {VoiceProgress} from './live-voice-progress.mjs';
@@ -86,8 +86,12 @@ function libraryNotice(){
 function characterOptions(){
   if(!characterLibrary)return;
   const picker=$('character-picker');picker.replaceChildren();
-  for(const profile of characterLibrary.list()){
-    const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name||'Untitled character';picker.append(option);
+  const profiles=characterLibrary.list();
+  for(const profile of profiles){
+    const recovered=/^recovered-(?:live|qwen)-character(?:-\d+)?$/.test(profile.id);
+    const duplicate=profiles.some(other=>other.id!==profile.id&&other.name.trim().toLowerCase()===profile.name.trim().toLowerCase());
+    const suffix=recovered?' · recovered':profile.id==='karim'&&duplicate?' · starter':'';
+    const option=document.createElement('option');option.value=profile.id;option.textContent=(profile.name||'Untitled character')+suffix;picker.append(option);
   }
   picker.value=characterLibrary.activeId;
   $('load-story-example').hidden=!characterLibrary.preset()?.narrative.beats.length;
@@ -132,7 +136,8 @@ async function loadCharacterLibrary(){
   try{profileStorage=localStorage;}catch(error){}
   let savedArchive=false;
   if(archivePage){try{savedArchive=!!profileStorage?.getItem('live-archive-character-library-v1');}catch(error){}}
-  characterLibrary=new CharacterLibrary({storage:profileStorage,current:capturedProfile(),presets,
+  const recoveryProfiles=archivePage?[]:legacyRecoveryProfiles(profileStorage);
+  characterLibrary=new CharacterLibrary({storage:profileStorage,current:capturedProfile(),presets,recoveryProfiles,
     ...(archivePage?{key:'live-archive-character-library-v1',legacyWrites:false}:{})});
   if(archivePage&&!savedArchive&&characterLibrary.preset('map-keeper'))characterLibrary.switchTo('map-keeper');
   applyProfile(characterLibrary.active());

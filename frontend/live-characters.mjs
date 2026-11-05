@@ -2,6 +2,8 @@ export const CHARACTER_LIBRARY_KEY='live-character-library-v1';
 const CHARACTER_FIELDS=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 const TRIGGER_FIELDS=['action','condition','emotion','behaviour','spoken_cue','delivery'];
 const BEAT_FIELDS=['title','goal','note','emotion','delivery','min_seconds','max_seconds'];
+const LEGACY_KEYS={'live-character-v1':'recovered-live-character','qwen-character-v1':'recovered-qwen-character'};
+const CHARACTER_LIMITS={name:80,role:120,about:2400,goal:500,environment:700,voice_style:500,rules:1000,memories:1200,beat:500};
 const copy=value=>JSON.parse(JSON.stringify(value));
 const strings=(source,fields)=>Object.fromEntries(fields.map(key=>[key,typeof source?.[key]==='string'?source[key]:'']));
 
@@ -27,8 +29,41 @@ export function characterProfile(value,id=value?.id){
   return profile;
 }
 
+function recoveryProfile(value,id){
+  if(!value||typeof value!=='object'||Array.isArray(value)||typeof value.name!=='string'
+      ||!value.name.trim()||value.name.length>80)return null;
+  for(const [key,maximum] of Object.entries(CHARACTER_LIMITS)){
+    if(value[key]!==undefined&&(typeof value[key]!=='string'||value[key].length>maximum))return null;
+  }
+  if(value.speaker!==undefined&&value.speaker!==''&&!['Chelsie','Ethan','Aiden'].includes(value.speaker))return null;
+  const character={...strings(value,CHARACTER_FIELDS),speaker:value.speaker||'Chelsie'};
+  if(!CHARACTER_FIELDS.some(key=>key!=='name'&&key!=='speaker'&&character[key].trim()))return null;
+  // The older Qwen save has character facts only. Other live settings were
+  // stored separately and may now belong to a different active character.
+  return characterProfile({character,voice:{preset:'automatic',emotion:'neutral',event:'none',direction:''},
+    director:{enabled:true,notes:''},trigger:null,narrative:{enabled:false,mode:'manual',beats:[]},
+    archive:{enabled:false,entry_ids:[]}},id);
+}
+
+const characterFacts=profile=>JSON.stringify(CHARACTER_FIELDS.map(key=>{
+  const value=profile.character[key]||(key==='speaker'?'Chelsie':'');
+  return value.trim().replace(/\s+/g,' ');
+}));
+
+// Only real legacy records are recovery evidence. Never pass the current form
+// or the fetched example here: either may already contain the default Anna.
+export function legacyRecoveryProfiles(storage){
+  const profiles=[];
+  for(const [key,id] of Object.entries(LEGACY_KEYS)){
+    let value;
+    try{value=JSON.parse(storage?.getItem(key)??'null');}catch(error){continue;}
+    const profile=recoveryProfile(value,id);if(profile)profiles.push(profile);
+  }
+  return profiles;
+}
+
 export class CharacterLibrary {
-  constructor({storage,current,presets=[],key=CHARACTER_LIBRARY_KEY,legacyWrites=true}){
+  constructor({storage,current,presets=[],key=CHARACTER_LIBRARY_KEY,legacyWrites=true,recoveryProfiles=[]}){
     this.storage=storage;this.storageError=false;this.profiles=new Map();this.presets=new Map();this.activeId=null;
     this.key=key;this.legacyWrites=legacyWrites;
     let saved;
@@ -42,7 +77,9 @@ export class CharacterLibrary {
       if(!migrated)throw new Error('A current character is needed before opening the character library.');
       this.profiles.set(migrated.id,migrated);this.activeId=migrated.id;
     }
-    this.addPresets(presets);this.persist();
+    this.addPresets(presets);
+    if(this.key===CHARACTER_LIBRARY_KEY&&this.legacyWrites)this._recover(recoveryProfiles);
+    this.persist();
   }
   persist(){
     if(!this.storage){this.storageError=true;return false;}
@@ -56,6 +93,20 @@ export class CharacterLibrary {
       const profile=characterProfile(value);if(!profile)continue;
       this.presets.set(profile.id,profile);
       if(!this.profiles.has(profile.id))this.profiles.set(profile.id,copy(profile));
+    }
+  }
+  _recover(profiles){
+    if(this.key!==CHARACTER_LIBRARY_KEY||!this.legacyWrites)return;
+    const sources=new Set(Object.values(LEGACY_KEYS));
+    const known=new Set([...this.profiles.values()].map(characterFacts));
+    for(const candidate of Array.isArray(profiles)?profiles:[]){
+      if(!sources.has(candidate?.id))continue;
+      const profile=recoveryProfile(candidate.character,candidate.id);
+      if(!profile)continue;
+      const facts=characterFacts(profile);if(known.has(facts))continue;
+      let id=profile.id,index=2;
+      while(this.profiles.has(id))id=profile.id+'-'+index++;
+      profile.id=id;this.profiles.set(id,profile);known.add(facts);
     }
   }
   list(){return [...this.profiles.values()].map(profile=>({id:profile.id,name:profile.character.name}));}

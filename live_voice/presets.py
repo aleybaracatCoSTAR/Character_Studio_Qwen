@@ -10,7 +10,7 @@ from .reactions import EmotionalTrigger
 from .voice import VoiceSettings
 
 DIRECTORY = Path(__file__).resolve().parent.parent / 'characters'
-PRESET_IDS = ('kaden', 'map-keeper')
+PRESET_IDS = ('kaden', 'map-keeper', 'karim')
 
 
 class CharacterPreset(BaseModel):

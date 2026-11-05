@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {CHARACTER_LIBRARY_KEY,CharacterLibrary,characterProfile} from '../frontend/live-characters.mjs';
+import {CHARACTER_LIBRARY_KEY,CharacterLibrary,characterProfile,legacyRecoveryProfiles} from '../frontend/live-characters.mjs';
 
 function storage(){
   const values=new Map();return {values,getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
@@ -286,4 +286,103 @@ test('creation stays usable in memory during quota failure while preserving the 
   assert.equal(saved.getItem('live-character-v1'),legacy);assert.equal(saved.getItem(CHARACTER_LIBRARY_KEY),originalLibrary);
   assert.equal(library.switchTo('local-character').character.about,current().character.about);
   assert.deepEqual(library.switchTo(created.id),created);
+});
+
+function anna(){return {...current(),character:{...current().character,name:'Anna',about:'An existing saved Anna definition.'}};}
+function snapshot(saved){return JSON.parse(saved.getItem(CHARACTER_LIBRARY_KEY));}
+
+test('a valid existing library recovers a surviving legacy Karim before active legacy writes can replace it',()=>{
+  const saved=storage(),original=anna();new CharacterLibrary({storage:saved,current:original,presets:[kaden()]});
+  const before=snapshot(saved),facts={...current().character,about:'Original Karim biography.\nKeep this exact second line.'};
+  saved.setItem('live-character-v1',JSON.stringify({...facts,reference_audio:'PRIVATE_LEGACY_AUDIO',reference_text:'PRIVATE_REFERENCE_WORDS'}));
+  saved.setItem('live-delivery-v1',JSON.stringify({emotion:'angry',direction:'An unrelated active voice.'}));
+  saved.setItem('live-trigger-v1',JSON.stringify(current().trigger));saved.setItem('live-story-v1',JSON.stringify(current().narrative));
+  const library=new CharacterLibrary({storage:saved,current:original,presets:[kaden()],recoveryProfiles:legacyRecoveryProfiles(saved)});
+  assert.equal(library.activeId,before.activeId);assert.deepEqual(library.active(),before.profiles[0]);
+  for(const prior of before.profiles)assert.deepEqual(snapshot(saved).profiles.find(value=>value.id===prior.id),prior);
+  const recovered=snapshot(saved).profiles.find(value=>value.id==='recovered-live-character');
+  assert.deepEqual(recovered.character,facts);assert.deepEqual(recovered.voice,{preset:'automatic',emotion:'neutral',event:'none',direction:''});
+  assert.deepEqual(recovered.director,{enabled:true,notes:''});assert.equal(recovered.trigger,null);
+  assert.deepEqual(recovered.narrative,{enabled:false,mode:'manual',beats:[]});assert.deepEqual(recovered.archive,{enabled:false,entry_ids:[]});
+  assert.doesNotMatch(saved.getItem(CHARACTER_LIBRARY_KEY),/PRIVATE_|An unrelated active voice/);
+  library.writeLegacy();assert.equal(JSON.parse(saved.getItem('live-character-v1')).name,'Anna');
+  assert.deepEqual(snapshot(saved).profiles.find(value=>value.id===recovered.id).character,facts);
+});
+
+test('both actual raw keys are parsed independently so a corrupt live record cannot hide a valid Qwen character',()=>{
+  const saved=storage();new CharacterLibrary({storage:saved,current:anna()});
+  saved.setItem('live-character-v1','malformed json');saved.setItem('qwen-character-v1',JSON.stringify(current().character));
+  const candidates=legacyRecoveryProfiles(saved);assert.equal(candidates.length,1);assert.equal(candidates[0].id,'recovered-qwen-character');
+  const library=new CharacterLibrary({storage:saved,current:anna(),recoveryProfiles:candidates});
+  assert.equal(library.active().character.name,'Anna');assert.equal(library.list().length,2);
+  assert.deepEqual(library.switchTo('recovered-qwen-character').character,current().character);
+});
+
+test('recovery deduplicates normalized character whitespace while preserving original saved text and stable IDs across reloads',()=>{
+  const saved=storage();new CharacterLibrary({storage:saved,current:anna(),presets:[kaden()]});
+  const original={...current().character,about:'Original  Karim\nbiography.',role:'Singer  and songwriter'};
+  const duplicate={...original,name:'  Karim ',about:'Original Karim biography.',role:'Singer\tand songwriter'};
+  saved.setItem('live-character-v1',JSON.stringify(original));saved.setItem('qwen-character-v1',JSON.stringify(duplicate));
+  for(let attempt=0;attempt<3;attempt++){
+    const library=new CharacterLibrary({storage:saved,current:anna(),presets:[kaden()],recoveryProfiles:legacyRecoveryProfiles(saved)});
+    assert.equal(library.activeId,'local-character');assert.equal(library.list().length,3);
+    assert.deepEqual(snapshot(saved).profiles.find(value=>value.id==='recovered-live-character').character,original);
+    library.writeLegacy();
+  }
+});
+
+test('stable recovery IDs resolve collisions without overwriting earlier profiles and remain idempotent',()=>{
+  const saved=storage(),main={id:'original-active',...anna()},collision={id:'recovered-live-character',...current(),character:{...current().character,name:'Morgan'}},
+    second={...collision,id:'recovered-live-character-2',character:{...collision.character,name:'Eli'}};
+  saved.setItem(CHARACTER_LIBRARY_KEY,JSON.stringify({version:1,activeId:main.id,profiles:[main,collision,second]}));
+  saved.setItem('live-character-v1',JSON.stringify(current().character));
+  for(let attempt=0;attempt<2;attempt++){
+    const library=new CharacterLibrary({storage:saved,current:anna(),recoveryProfiles:legacyRecoveryProfiles(saved)});
+    assert.equal(library.activeId,main.id);assert.equal(library.list().length,4);
+    const profiles=snapshot(saved).profiles;
+    assert.deepEqual(profiles.find(value=>value.id===collision.id),collision);assert.deepEqual(profiles.find(value=>value.id===second.id),second);
+    assert.deepEqual(profiles.find(value=>value.id==='recovered-live-character-3').character,current().character);
+  }
+});
+
+test('missing, corrupt, unsupported or empty legacy records cannot recover a form fallback or fabricate a biography',()=>{
+  for(const raw of [null,'bad json','null','[]','{}',JSON.stringify({name:'Karim'}),JSON.stringify({name:' ',role:'Singer'}),
+    JSON.stringify({name:'Karim',role:'   '}),JSON.stringify({name:'Karim',about:{private:'No string coercion'}}),
+    JSON.stringify({name:'Karim',role:'Singer',speaker:'Unsupported'}),JSON.stringify({name:'Karim',about:'x'.repeat(2401)}),JSON.stringify(current())]){
+    const saved=storage();new CharacterLibrary({storage:saved,current:anna()});if(raw!==null)saved.setItem('live-character-v1',raw);
+    assert.deepEqual(legacyRecoveryProfiles(saved),[]);
+    const library=new CharacterLibrary({storage:saved,current:current(),recoveryProfiles:legacyRecoveryProfiles(saved)});
+    assert.equal(library.list().length,1);assert.equal(library.active().character.name,'Anna');
+  }
+});
+
+test('existing matching character facts suppress recovery even when legacy auxiliary settings differ',()=>{
+  const saved=storage(),authored={...current(),character:{...current().character,about:'Existing\n biography.'}};
+  new CharacterLibrary({storage:saved,current:authored});saved.setItem('qwen-character-v1',JSON.stringify({...authored.character,about:'Existing biography.'}));
+  const library=new CharacterLibrary({storage:saved,current:anna(),recoveryProfiles:legacyRecoveryProfiles(saved)});
+  assert.deepEqual(library.active(),{id:'local-character',...authored});assert.equal(library.list().length,1);
+  assert.equal(library.active().voice.preset,'custom');assert.equal(library.active().narrative.enabled,true);
+});
+
+test('archive and custom libraries reject recovery candidates without writing main or legacy records',()=>{
+  const saved=storage();new CharacterLibrary({storage:saved,current:anna()});saved.setItem('live-character-v1',JSON.stringify(current().character));
+  const main=saved.getItem(CHARACTER_LIBRARY_KEY),legacy=saved.getItem('live-character-v1'),candidates=legacyRecoveryProfiles(saved);
+  for(const key of ['live-archive-character-library-v1','another-library']){
+    const library=new CharacterLibrary({storage:saved,current:anna(),key,legacyWrites:false,recoveryProfiles:candidates});
+    assert.equal(library.list().length,1);assert.equal(library.active().character.name,'Anna');
+    assert.equal(saved.getItem(CHARACTER_LIBRARY_KEY),main);assert.equal(saved.getItem('live-character-v1'),legacy);
+  }
+});
+
+test('failed recovery persistence preserves the original legacy save and permits a later successful recovery',()=>{
+  const saved=storage();new CharacterLibrary({storage:saved,current:anna()});saved.setItem('live-character-v1',JSON.stringify(current().character));
+  const legacy=saved.getItem('live-character-v1'),before=saved.getItem(CHARACTER_LIBRARY_KEY),setItem=saved.setItem;
+  saved.setItem=(key,value)=>{if(key===CHARACTER_LIBRARY_KEY)throw new Error('Quota.');setItem(key,value);};
+  const library=new CharacterLibrary({storage:saved,current:anna(),recoveryProfiles:legacyRecoveryProfiles(saved)});
+  assert.equal(library.storageError,true);assert.equal(library.list().length,2);assert.equal(library.writeLegacy(),false);
+  assert.equal(saved.getItem('live-character-v1'),legacy);assert.equal(saved.getItem(CHARACTER_LIBRARY_KEY),before);
+  saved.setItem=setItem;
+  const restored=new CharacterLibrary({storage:saved,current:anna(),recoveryProfiles:legacyRecoveryProfiles(saved)});
+  assert.equal(restored.storageError,false);assert.equal(restored.active().character.name,'Anna');assert.equal(restored.list().length,2);
+  assert.deepEqual(restored.switchTo('recovered-live-character').character,current().character);
 });

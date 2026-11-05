@@ -41,4 +41,4 @@ Useful checks: KADEN admits the known lie when challenged, responds meaningfully
 - `live_voice/presets.py`: schema validation and read-only preset loading.
 - `frontend/live-characters.mjs`: isolated browser profiles and migration of the existing character.
 
-The preset API returns only authored KADEN data. Karim's existing definition stays in the user's browser; no replacement biography or private Karim material is committed to the repository.
+The preset API returns authored examples. Existing user-edited character definitions stay in the browser. A later [Karim starter](KARIM.md), reconstructed from Aley's brief rather than recovered private browser text, is now bundled separately; it does not replace saved versions.

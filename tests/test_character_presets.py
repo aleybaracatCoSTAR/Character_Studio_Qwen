@@ -42,7 +42,7 @@ class CharacterPresetTests(unittest.TestCase):
         self.assertTrue(self.profile.director.enabled)
         self.assertIsNone(self.profile.trigger)
         self.assertEqual(set(self.values), {'id', 'character', 'voice', 'director', 'trigger', 'narrative'})
-        self.assertEqual([value['id'] for value in presets()], ['kaden', 'map-keeper'])
+        self.assertEqual([value['id'] for value in presets()], ['kaden', 'map-keeper', 'karim'])
 
     def test_loader_validates_source_file_limits_before_returning_a_profile(self):
         invalid = []
@@ -179,7 +179,7 @@ class CharacterPresetTests(unittest.TestCase):
         self.assertEqual(next(value for value in presets() if value['id']=='kaden'), expected)
 
     def test_unknown_ids_are_rejected_instead_of_becoming_filesystem_paths(self):
-        for name in ('missing', 'karim', '../anna', '../../etc/passwd', '/tmp/kaden',
+        for name in ('missing', 'unknown-character', '../anna', '../../etc/passwd', '/tmp/kaden',
                      'kaden.json', 'KADEN', 'kaden/../anna'):
             with self.subTest(name=name), self.assertRaises(KeyError): preset(name)
 
@@ -216,6 +216,34 @@ class CharacterPresetAPITests(unittest.TestCase):
         self.assertIn('not a contributor', profile.character.about)
         self.assertIn('never claim to search the whole map', profile.character.rules)
 
+    def test_karim_is_available_without_loading_models_and_uses_the_existing_profile_schema(self):
+        response = self.client.get('/api/characters/presets/karim')
+        self.assertEqual(response.status_code, 200)
+        profile = CharacterPreset.model_validate(response.json())
+        listed = self.client.get('/api/characters/presets').json()
+        self.assertEqual(next(value for value in listed if value['id']=='karim'), response.json())
+        self.assertEqual(profile.character.name, 'Karim')
+        self.assertEqual(profile.voice.preset, 'male')
+        self.assertTrue(profile.director.enabled)
+        self.assertIsNone(profile.trigger)
+        self.assertEqual(response.headers['cache-control'], 'no-store')
+        response.json()['character']['name'] = 'Edited locally'
+        self.assertEqual(self.client.get('/api/characters/presets/karim').json()['character']['name'], 'Karim')
+
+    def test_karim_starts_in_free_conversation_and_optional_beats_require_performer_control(self):
+        profile = CharacterPreset.model_validate(preset('karim'))
+        self.assertFalse(profile.narrative.enabled)
+        self.assertEqual(profile.narrative.mode, 'manual')
+        self.assertEqual(len(profile.narrative.beats), 3)
+        clock = Clock()
+        story = NarrativeState(profile.narrative.model_copy(update={'enabled': True}), clock=clock)
+        clock.now = 10_000
+        self.assertFalse(story.timeout())
+        self.assertEqual(story.index, 0)
+        self.assertFalse(story.completion(True, 'A disclosure', 'A disclosure')[0])
+        self.assertTrue(story.move(reason='performer'))
+        self.assertEqual(story.index, 1)
+
     def test_existing_anna_example_and_story_remain_unchanged(self):
         character = self.client.get('/api/example')
         self.assertEqual(character.status_code, 200)
@@ -228,7 +256,7 @@ class CharacterPresetAPITests(unittest.TestCase):
         self.assertEqual(story.json(), expected)
 
     def test_missing_or_path_like_ids_return_404_and_cannot_replace_profiles(self):
-        for name in ('missing', 'karim', 'kaden.json', '..%2Fanna', '%2Ftmp%2Fkaden'):
+        for name in ('missing', 'unknown-character', 'kaden.json', '..%2Fanna', '%2Ftmp%2Fkaden'):
             result = self.client.get('/api/characters/presets/' + name)
             with self.subTest(name=name): self.assertEqual(result.status_code, 404)
         changed = preset('kaden')

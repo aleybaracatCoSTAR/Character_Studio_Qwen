@@ -1,4 +1,16 @@
-# Latest change: residual voice-code vocabulary and preparation timings, 5 November 2026
+# Latest change: Karim starter and surviving legacy profiles, 5 November 2026
+
+Karim was missing from the user's picker. No original Karim export was found in the local project, outputs or handover; earlier repository mentions were browser-preservation notes and test placeholders. The older CharacterPlex service may have a separate server-side library/history, and different browser addresses/ports have separate storage. The current main and archive pages also keep separate libraries.
+
+`characters/karim.json`, `karim-profile.json` and `karim-story.json` now provide a registered starter reconstructed from Aley's brief: an Egyptian gay singer/songwriter in London, out there but not to his parents, navigating faith and family. Age, denomination, relationship status, parental knowledge/reaction and dated life events remain unspecified. The male reference and neutral delivery start with the director on, no trigger and narrative off; three optional manual beats do not prescribe coming out or reconciliation. The bundled profile does not replace a saved same-ID profile. See [Karim and recovery limits](KARIM.md).
+
+A conditional migration loss was also found: when a valid library already existed, its constructor ignored the legacy character loaded into the form, then applying the active library profile overwrote `live-character-v1`. Main-page startup now independently reads meaningful, validated records from both real legacy character keys and merges differing character facts before its first library save or legacy write. Existing profiles and selection stay intact. Deduplication uses normalized character facts rather than unrelated voice/story settings; recovered entries use stable collision-safe IDs and clean auxiliary defaults. Main/archive separation and the existing storage-failure write guard remain intact. No synthetic fallback form or fetched Anna is treated as recovery evidence, and reference audio is never migrated.
+
+Browser verification selected Karim in a local design preview and showed his fields and free-conversation state. This is not a recovered original profile or a live model-quality check. Pull, restart the Python stack and refresh to load the new preset; the frontend migration runs in that same browser address. No models, dependencies, GPU jobs or audio-generation settings changed.
+
+All **601 Python and 156 JavaScript tests pass locally**. New checks cover the read-only Karim API, optional manual beats, legacy migration despite an existing library, independent malformed-key handling, collision/dedup behavior, archive isolation, clean auxiliary defaults and failed-save preservation. The older local CharacterPlex endpoint at port 18090 was unavailable; its remote saved library was not recovered.
+
+# Previous change: residual voice-code vocabulary and preparation timings, 5 November 2026
 
 The user reports a Female-reference archive reply failing with 34 seconds of generated waveform and 2/61 words matched, plus a long wait and variable delivery. Female already sends one fixed bundled reference per turn; no reference switch was found. The waveform duration is not wall time, and recognition coverage alone does not establish the exact audible words. All 61 normalized words in the supplied quoted passage are retained.
 
