@@ -463,6 +463,7 @@ async function init(){
   storyEditor.load(Array.isArray(script.beats)?script.beats:[]);$('story-enabled').checked=!!script.enabled;
   if(['manual','timed','director'].includes(script.mode))$('story-mode').value=script.mode;
   $('story-settings').hidden=!$('story-enabled').checked;previewStory();
+  await archivePanel.loadCollections();
   await archivePanel.load();
   await loadCharacterLibrary();
   await status();setInterval(status,5000);

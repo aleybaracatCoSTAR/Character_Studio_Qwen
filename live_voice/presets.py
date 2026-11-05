@@ -8,9 +8,10 @@ from .director import DirectorSettings
 from .narrative import NarrativeSettings
 from .reactions import EmotionalTrigger
 from .voice import VoiceSettings
+from .archive import ArchiveSettings
 
 DIRECTORY = Path(__file__).resolve().parent.parent / 'characters'
-PRESET_IDS = ('kaden', 'map-keeper', 'karim')
+PRESET_IDS = ('kaden', 'map-keeper', 'karim', 'art-guide')
 
 
 class CharacterPreset(BaseModel):
@@ -21,6 +22,7 @@ class CharacterPreset(BaseModel):
     director: DirectorSettings
     trigger: EmotionalTrigger | None = None
     narrative: NarrativeSettings
+    archive: ArchiveSettings | None = None
 
 
 def preset(preset_id):
@@ -28,7 +30,9 @@ def preset(preset_id):
     settings = json.loads((DIRECTORY / f'{preset_id}-profile.json').read_text())
     settings['character'] = json.loads((DIRECTORY / f'{preset_id}.json').read_text())
     settings['narrative'] = json.loads((DIRECTORY / f'{preset_id}-story.json').read_text())
-    return CharacterPreset.model_validate(settings).model_dump()
+    values = CharacterPreset.model_validate(settings).model_dump()
+    if values['archive'] is None: values.pop('archive')
+    return values
 
 
 def presets():

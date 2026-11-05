@@ -15,6 +15,7 @@ from .voice_progress import observe_voice_progress, voice_timing_metrics
 from .turns import ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
 from .archive import retrieve, grounding_messages
+from .collections import collection_grounding_messages
 
 logger = logging.getLogger(__name__)
 
@@ -315,10 +316,13 @@ class LiveSession:
                 else:
                     matches = retrieve(self.archive_entries, text, director_context)
                     count = len(self.archive_entries)
-                archive_context = grounding_messages(matches, scope=scope)
+                archive_context = (collection_grounding_messages(matches) if self.archive.collection_ids
+                                   else grounding_messages(matches, scope=scope))
                 self.last_archive_context = archive_context
-                await self.send_json({'type':'archive_sources','turn_id':turn_id,'scope':scope,
-                                      'selected_count':count,'matches':matches})
+                source_event = {'type':'archive_sources','turn_id':turn_id,'scope':scope,
+                                'selected_count':count,'matches':matches}
+                if self.archive.collection_ids: source_event['collection_ids'] = self.archive.collection_ids
+                await self.send_json(source_event)
             plan = None
             if self.director.enabled:
                 check_started = time.perf_counter()

@@ -26,6 +26,9 @@ export function characterProfile(value,id=value?.id){
   if(value.archive&&typeof value.archive==='object')profile.archive={enabled:value.archive.enabled===true,
     ...(value.archive.scope==='library'?{scope:'library'}:{}),
     entry_ids:[...new Set(Array.isArray(value.archive.entry_ids)?value.archive.entry_ids.filter(id=>typeof id==='string'&&/^[a-f0-9]{32}$/.test(id)):[])].slice(0,50)};
+  const collections=[...new Set(Array.isArray(value.archive?.collection_ids)?value.archive.collection_ids
+    .filter(id=>typeof id==='string'&&/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)):[])].slice(0,8);
+  if(collections.length)profile.archive={enabled:value.archive.enabled===true,scope:'library',entry_ids:[],collection_ids:collections};
   return profile;
 }
 

@@ -42,7 +42,7 @@ class CharacterPresetTests(unittest.TestCase):
         self.assertTrue(self.profile.director.enabled)
         self.assertIsNone(self.profile.trigger)
         self.assertEqual(set(self.values), {'id', 'character', 'voice', 'director', 'trigger', 'narrative'})
-        self.assertEqual([value['id'] for value in presets()], ['kaden', 'map-keeper', 'karim'])
+        self.assertEqual([value['id'] for value in presets()], ['kaden', 'map-keeper', 'karim', 'art-guide'])
 
     def test_loader_validates_source_file_limits_before_returning_a_profile(self):
         invalid = []

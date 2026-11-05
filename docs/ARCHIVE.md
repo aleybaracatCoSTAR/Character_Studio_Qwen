@@ -1,5 +1,7 @@
 # Character + archive
 
+For the National Gallery of Art character, multiple named collections and retrieved images beside chat, see [RAG collections](RAG_COLLECTIONS.md). The QTM workflows below retain their existing database and source validation.
+
 Open `/archive/` to speak to **Mika**, an editable fictional character that consults Queering the Map stories. The normal character interface, voice settings, memories, director and narrative controls remain available. The archive page keeps a separate browser character library, preserving the main Karim/KADEN view.
 
 ## Whole local archive or selected stories

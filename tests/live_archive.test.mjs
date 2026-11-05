@@ -19,7 +19,10 @@ function setup(handler,{useDefaultFetch=false}={}){
     'archive-submit','archive-entries','archive-entry-id','archive-paste-title','archive-paste-text','archive-paste-source',
     'archive-paste','archive-dialog-error','archive-status','archive-count','archive-empty','archive-limit',
     'archive-reply-sources','archive-sources-list','archive-sources-summary','archive-sources-note',
-    'archive-scope','archive-search','archive-search-submit','archive-previous','archive-next','archive-import-file','archive-import','archive-library-count','archive-page'];
+    'archive-scope','archive-search','archive-search-submit','archive-previous','archive-next','archive-import-file','archive-import','archive-library-count','archive-page',
+    'archive-collection-tools','archive-collections','archive-add-collection','archive-collection-dialog','archive-collection-form',
+    'archive-collection-name','archive-collection-file','archive-collection-submit','archive-collection-close','archive-collection-error',
+    'archive-qtm-import','archive-qtm-note','archive-qtm-credit','archive-artworks','archive-artworks-list','archive-search-label','archive-search-form'];
   const nodes=Object.fromEntries(ids.map(id=>[id,element()])),calls=[],changes=[];
   const document={getElementById:id=>nodes[id],createElement:element};
   const fetch=async(path,options)=>{

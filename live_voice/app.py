@@ -29,6 +29,8 @@ from .presets import preset, presets
 from .archive import ArchiveSettings, ArchiveStore
 from .archive_database import ArchiveDatabase, MAX_IMPORT_BYTES, MAX_DATABASE_ENTRIES
 from .archive_source import QueeringTheMap, ArchiveSourceUnavailable, qtm_entry_id
+from .collections import CollectionDatabase
+from .collection_catalog import CollectionCatalog
 from .listening import ListeningClient, ListeningSession, ListeningError
 from .listening_config import EXPERIMENT, listening_mode, listening_profile
 
@@ -65,7 +67,8 @@ async def _archive_job(callback, *args, dispose=None, **kwargs):
         raise cancelled
 
 
-def create_app(preview=False, providers=None, vad_factory=None, archive_store=None, archive_importer=None, listening_client=None):
+def create_app(preview=False, providers=None, vad_factory=None, archive_store=None, archive_importer=None, listening_client=None,
+               collections_store=None):
     input_mode = listening_mode()
     deployment = listening_profile(profile(),input_mode)
     experimental = (listening_client or ListeningClient(os.environ.get('LIVE_LISTENING_URL','http://127.0.0.1:18095'))) if input_mode == EXPERIMENT else None
@@ -83,8 +86,12 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
     call_lock = asyncio.Lock()
     downloads = ExportDownloads()
     owns_archive_store = archive_store is None
-    archive_store = archive_store or ArchiveDatabase(Path(os.environ.get('LIVE_ARCHIVE_DIR') or
-        str(Path(os.environ.get('LIVE_VOICE_STORE', str(Path.home() / '.local/share/character-studio'))) / 'archive')))
+    archive_directory = Path(os.environ.get('LIVE_ARCHIVE_DIR') or
+        str(Path(os.environ.get('LIVE_VOICE_STORE', str(Path.home() / '.local/share/character-studio'))) / 'archive'))
+    archive_store = archive_store or ArchiveDatabase(archive_directory)
+    owns_collections_store = collections_store is None
+    collections_store = collections_store or CollectionDatabase(archive_directory)
+    collection_catalog = CollectionCatalog(archive_store, collections_store)
     archive_importer = archive_importer or QueeringTheMap()
     archive_write_lock = asyncio.Lock()
 
@@ -97,6 +104,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         await services.close()
         if experimental is not None: await experimental.close()
         if owns_archive_store: await asyncio.to_thread(archive_store.close)
+        if owns_collections_store: await asyncio.to_thread(collections_store.close)
 
     async def service_health():
         health = await services.health()
@@ -141,6 +149,67 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
     def archive_entries(q: str = Query('',max_length=200), offset: int = Query(0,ge=0),
                         limit: int = Query(25,ge=1,le=50)):
         return archive_page(q,offset,limit)
+
+    @app.get('/api/archive/collections')
+    def list_archive_collections():
+        try: return {'collections':collection_catalog.list_collections()}
+        except (OSError, ValueError, sqlite3.Error):
+            raise HTTPException(status_code=503,detail='The saved collections could not be read.') from None
+
+    @app.get('/api/archive/collections/entries')
+    def collection_entries(ids: str = Query('',max_length=520), q: str = Query('',max_length=200),
+                           offset: int = Query(0,ge=0), limit: int = Query(25,ge=1,le=50)):
+        try: return collection_catalog.page(ids.split(',') if ids else [], query=q, offset=offset, limit=limit)
+        except KeyError:
+            raise HTTPException(status_code=404,detail='A selected collection is no longer available.') from None
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400,detail='Choose between one and eight saved collections.') from None
+        except (OSError, sqlite3.Error):
+            raise HTTPException(status_code=503,detail='The saved collections could not be searched.') from None
+
+    @app.post('/api/archive/collections/import')
+    async def import_named_collection(request: Request):
+        require_archive_origin(request)
+        if request.headers.get('content-type','').split(';',1)[0].strip().lower() != 'application/octet-stream':
+            raise HTTPException(status_code=400,detail='Upload a JSON, JSONL or CSV collection file.')
+        filename = unquote(request.headers.get('x-archive-filename',''))
+        name = unquote(request.headers.get('x-collection-name','')).strip()
+        suffix = Path(filename).suffix.lower()
+        if (suffix not in ('.json','.jsonl','.csv') or not 0<len(filename)<=200
+                or any(ord(character)<32 or ord(character)==127 for character in filename)):
+            raise HTTPException(status_code=400,detail='Choose a JSON, JSONL or CSV collection file.')
+        if (not 0<len(name)<=80 or any(ord(character)<32 or ord(character)==127 for character in name)):
+            raise HTTPException(status_code=400,detail='Give the collection a name within 80 characters.')
+        declared = request.headers.get('content-length')
+        if declared is not None:
+            try:
+                if int(declared)<0: raise ValueError()
+                if int(declared)>MAX_IMPORT_BYTES:
+                    raise HTTPException(status_code=413,detail='The collection file exceeds 128 MiB.')
+            except ValueError:
+                raise HTTPException(status_code=400,detail='The collection upload size is invalid.') from None
+        async with archive_write_lock:
+            if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before adding a collection.')
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(prefix='character-collection-',suffix=suffix,delete=False) as stream:
+                    temporary = Path(stream.name)
+                    size = 0
+                    async for packet in request.stream():
+                        size += len(packet)
+                        if size>MAX_IMPORT_BYTES:
+                            raise HTTPException(status_code=413,detail='The collection file exceeds 128 MiB.')
+                        stream.write(packet)
+                if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before adding a collection.')
+                return await _archive_job(collections_store.import_file, temporary, label=name)
+            except OverflowError:
+                raise HTTPException(status_code=413,detail='The collection exceeds the record or field limits.') from None
+            except (ValueError, TypeError, UnicodeError):
+                raise HTTPException(status_code=400,detail='The file needs title, text and public HTTPS source_url fields. Check its format; no partial import was saved.') from None
+            except (OSError, sqlite3.Error):
+                raise HTTPException(status_code=503,detail='The collection could not be saved. Check the archive storage.') from None
+            finally:
+                if temporary is not None: temporary.unlink(missing_ok=True)
 
     @app.get('/api/archive/selection')
     def archive_selection(ids: str = Query('',max_length=1700)):
@@ -284,7 +353,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                              'chunk_ms':560 if experimental is not None else None},
                 "model_inspection":True,
                 "inspection_download":True,
-                "character_presets":True,
+                "character_presets":True, "archive_collections":True,
                 "archive":({"available":True,"scope":"library","limit":MAX_DATABASE_ENTRIES,
                             "selection_limit":50,"bulk_import":True} if isinstance(archive_store,ArchiveDatabase)
                            else {"available":True,"scope":"selected","limit":50}),
@@ -374,7 +443,10 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 archive_entries = ()
                 if archive.enabled:
                     async with archive_write_lock:
-                        if archive.scope == 'library':
+                        if archive.collection_ids:
+                            archive_search = await _archive_job(collection_catalog.open_snapshot, archive.collection_ids,
+                                                                 dispose=lambda snapshot:snapshot.close())
+                        elif archive.scope == 'library':
                             if not isinstance(archive_store,ArchiveDatabase): raise ValueError('Database unavailable.')
                             archive_search = await _archive_job(archive_store.open_snapshot, dispose=lambda snapshot:snapshot.close())
                         else:

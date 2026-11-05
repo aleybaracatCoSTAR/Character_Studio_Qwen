@@ -1,0 +1,7 @@
+{
+  "id": "art-guide",
+  "voice": {"preset": "female", "emotion": "neutral", "event": "none", "direction": "Warm, attentive conversational delivery, steady across the whole reply."},
+  "director": {"enabled": false, "notes": "Follow the visitor's curiosity. Keep artwork facts grounded in retrieved records and leave room for a response. No invented visual observation or museum authority."},
+  "trigger": null,
+  "archive": {"enabled": true, "scope": "library", "entry_ids": [], "collection_ids": ["national-gallery-of-art"]}
+}

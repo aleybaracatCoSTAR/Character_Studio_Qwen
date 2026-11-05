@@ -112,6 +112,7 @@ class ArchiveSettings(BaseModel):
     enabled: bool = False
     scope: Literal['selected', 'library'] = 'selected'
     entry_ids: list[str] = Field(default_factory=list, max_length=MAX_ENTRIES)
+    collection_ids: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator('entry_ids')
     @classmethod
@@ -120,6 +121,20 @@ class ArchiveSettings(BaseModel):
             raise ValueError('Choose entries from the saved passage list.')
         if len(values) != len(set(values)): raise ValueError('Choose each passage only once.')
         return values
+
+    @field_validator('collection_ids')
+    @classmethod
+    def unique_collection_ids(cls, values):
+        if (any(not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}', value) for value in values)
+                or len(values) != len(set(values))):
+            raise ValueError('Choose each saved collection only once.')
+        return values
+
+    @model_validator(mode='after')
+    def collection_scope(self):
+        if self.collection_ids and (self.scope != 'library' or self.entry_ids):
+            raise ValueError('Use whole-library scope with collections, without selected-story IDs.')
+        return self
 
 
 class _Manifest(BaseModel):

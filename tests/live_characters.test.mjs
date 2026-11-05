@@ -386,3 +386,23 @@ test('failed recovery persistence preserves the original legacy save and permits
   assert.equal(restored.storageError,false);assert.equal(restored.active().character.name,'Anna');assert.equal(restored.list().length,2);
   assert.deepEqual(restored.switchTo('recovered-live-character').character,current().character);
 });
+
+test('explicit collection choices persist per character with whole-collection scope and no copied source metadata',()=>{
+  const saved=storage(),initial={...current(),archive:{enabled:true,scope:'selected',entry_ids:['a'.repeat(32)],
+    collection_ids:['national-gallery-of-art','local-art','national-gallery-of-art'],metadata:{artist:'PRIVATE_SOURCE_ARTIST'},image_url:'PRIVATE_SOURCE_IMAGE'}};
+  const library=new CharacterLibrary({storage:saved,current:initial,presets:[kaden()]});
+  assert.deepEqual(library.active().archive,{enabled:true,scope:'library',entry_ids:[],collection_ids:['national-gallery-of-art','local-art']});
+  library.switchTo('kaden');assert.equal(library.active().archive,undefined);
+  const reloaded=new CharacterLibrary({storage:saved,current:kaden(),presets:[kaden()]});
+  assert.deepEqual(reloaded.switchTo('local-character').archive,{enabled:true,scope:'library',entry_ids:[],collection_ids:['national-gallery-of-art','local-art']});
+  assert.doesNotMatch(saved.getItem(CHARACTER_LIBRARY_KEY),/PRIVATE_SOURCE/);
+});
+
+test('collection IDs are bounded and validated without changing the exact legacy QTM profile shape',()=>{
+  const legacy=characterProfile({...current(),archive:{enabled:true,scope:'library',entry_ids:['a'.repeat(32)],collection_ids:[]}},'legacy');
+  assert.deepEqual(legacy.archive,{enabled:true,scope:'library',entry_ids:['a'.repeat(32)]});
+  const choices=['bad/id','UPPER','-bad','x'.repeat(65),...Array.from({length:12},(_,index)=>'collection-'+index)];
+  const explicit=characterProfile({...current(),archive:{enabled:false,entry_ids:['a'.repeat(32)],collection_ids:choices}},'explicit');
+  assert.equal(explicit.archive.collection_ids.length,8);assert.deepEqual(explicit.archive.entry_ids,[]);
+  assert.equal(explicit.archive.scope,'library');assert.equal(explicit.archive.enabled,false);
+});
