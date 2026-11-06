@@ -81,6 +81,14 @@ test('metrics distinguish actual synthesis and checking from model first bytes a
   assert.doesNotMatch(value,/audible|playback|Voice preparation|Complete voice take/i);
 });
 
+test('streaming timings name the playback policy without claiming measured speaker onset',()=>{
+  const value=formatVoiceMetrics({voice_pipeline:'drama-stream-v1',speech_end_to_first_audio_ms:850,
+    voice_model_first_audio_ms:104,voice_synthesis_ms:2873,voice_verification_ms:418});
+  assert.match(value,/^Drama 3 streaming · Server to audio delivery: 850 ms/);
+  assert.match(value,/Model first bytes: 104 ms/);
+  assert.doesNotMatch(value,/audible|speaker onset/);
+});
+
 test('failure-only timing data omits absent actor and endpoint totals without undefined or NaN',()=>{
   const value=formatVoiceMetrics({voice_failed:true,voice_synthesis_ms:9000,voice_verification_ms:1200,voice_attempts:2});
   assert.equal(value,'Voice failed · Voice generation: 9000 ms · Speech checking: 1200 ms · Voice attempts: 2');

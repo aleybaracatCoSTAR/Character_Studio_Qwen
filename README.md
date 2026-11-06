@@ -1,6 +1,10 @@
 # Character Studio · Qwen
 
-**Direct Drama 3 latency test:** run one warmup and five measured voice requests, with a fixed reference, playable WAVs and a JSON report. It bypasses the conversation's recognition/director/actor and complete-take word checks without changing that pipeline. [Run and interpret the benchmark](docs/DRAMA3_LATENCY.md).
+**Unity demo (`unity-demo` branch):** the [Robin Unity package](unity/README.md) adds a separate gallery scene, microphone/text conversation, retrieved artwork textures and a comparison panel for Drama 3 and streaming Qwen3-Omni. The GPU services and archive databases stay on the existing server.
+
+**Lower-delay Drama 3 playback:** the live app now plays audio as it arrives, with one voice and emotion per complete reply. Full-take checking remains available via `LIVE_VOICE_PLAYBACK=checked`; streaming checks run after release and incomplete audio never restarts automatically. [Mode and restart details](docs/DRAMA3_LATENCY.md#live-playback-mode).
+
+**Direct Drama 3 latency test:** run one warmup and five measured voice requests, with a fixed reference, playable WAVs and a JSON report. It bypasses the conversation's recognition/director/actor and complete-take word checks separately from either playback mode. [Run and interpret the benchmark](docs/DRAMA3_LATENCY.md).
 
 **Archive gallery:** open **Gallery view** at `/archive/gallery/` for a centred artwork, a thumbnail trail and a compact character conversation. Retrieved artworks reveal from mosaic blocks to a clear image; museum details and source links remain beside the chat. The existing `/archive/` view stays available and shares the same saved archive characters. [Gallery controls and behaviour](docs/ARCHIVE_GALLERY.md).
 

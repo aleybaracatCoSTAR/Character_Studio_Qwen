@@ -25,6 +25,11 @@ printf 'Character Studio batch job %s on %s\n' "$SLURM_JOB_ID" "$(hostname)"
 if character_revision=$(git rev-parse --short HEAD 2>/dev/null); then
   printf 'Code revision: %s\n' "$character_revision"
 fi
+export LIVE_VOICE_PLAYBACK="${LIVE_VOICE_PLAYBACK:-streaming}"
+printf 'Drama 3 playback: %s\n' "$LIVE_VOICE_PLAYBACK"
+if [[ "$LIVE_VOICE_PLAYBACK" == 'streaming' ]]; then
+  echo 'Audio streams before the full take is checked; incomplete takes never restart after playback begins.'
+fi
 if [[ "${LIVE_VERIFY_VOICE:-1}" == '0' ]]; then
   echo 'Spoken-word verification: disabled by environment'
 else

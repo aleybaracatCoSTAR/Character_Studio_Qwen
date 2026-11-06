@@ -40,6 +40,7 @@ from .engines import engine_name
 from .museum_images import MuseumImages, MuseumImageUnavailable
 from .listening import ListeningClient, ListeningSession, ListeningError
 from .listening_config import EXPERIMENT, listening_mode, listening_profile
+from .playback_policy import streams_voice, voice_pipeline, verification_before_playback
 
 
 async def _archive_job(callback, *args, dispose=None, **kwargs):
@@ -90,7 +91,8 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                                           llm_model=os.environ.get("LIVE_LLM_MODEL", "live-character"),
                                           director_timeout=os.environ.get("LIVE_DIRECTOR_TIMEOUT",deployment["director_timeout"]),
                                           verify_voice=os.environ.get('LIVE_VERIFY_VOICE','1') != '0',
-                                          verification_timeout=os.environ.get('LIVE_VOICE_VERIFY_TIMEOUT','20'))
+                                          verification_timeout=os.environ.get('LIVE_VOICE_VERIFY_TIMEOUT','20'),
+                                          voice_playback=os.environ.get('LIVE_VOICE_PLAYBACK','streaming'))
     default_engine = engine_name(os.environ.get('LIVE_DEFAULT_ENGINE','baseline'))
     if omni_provider is None and os.environ.get('LIVE_OMNI_URL'):
         from .omni import OmniProvider
@@ -443,10 +445,12 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                        else await service_health(omni_provider))
         health = omni_health if default_engine == 'qwen-omni' else baseline_health
         return {"preview":preview,"ready":all(health.values()),"services":health,
-                "voice_pipeline":"qwen-omni-stream-v1" if default_engine == 'qwen-omni' else "voice-checked-v5", "voice_progress":True,
+                "voice_pipeline":"qwen-omni-stream-v1" if default_engine == 'qwen-omni' else voice_pipeline(services), "voice_progress":True,
                 'comparison':{'default_engine':default_engine,'director_policy':'same-turn',
                     'engines':{'baseline':{'available':True,'ready':all(baseline_health.values()),
-                        'services':baseline_health,'output_rate':44100,'streaming_speech':False},
+                        'services':baseline_health,'output_rate':44100,'streaming_speech':False,
+                        'voice_playback':'streaming' if streams_voice(services) else 'checked',
+                        'whole_reply_verification':verification_before_playback(services)},
                         'qwen-omni':{'available':omni_provider is not None,'ready':omni_provider is not None and all(omni_health.values()),
                         'services':omni_health,'output_rate':24000,'streaming_speech':True,
                         'model':'Qwen/Qwen3-Omni-30B-A3B-Instruct','whole_reply_verification':False}}},
@@ -462,7 +466,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                             "selection_limit":50,"bulk_import":True} if isinstance(archive_store,ArchiveDatabase)
                            else {"available":True,"scope":"selected","limit":50}),
                 "beat_entry_replies":True, "voice_retry":True, "voice_interruptions":True,
-                "voice_verification":default_engine == 'baseline' and bool(getattr(services,'verify_voice',False)),
+                "voice_verification":default_engine == 'baseline' and verification_before_playback(services),
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
                 "models":{"actor":'Qwen/Qwen3-Omni-30B-A3B-Instruct' if default_engine == 'qwen-omni' else deployment['actor']['id'],
@@ -640,7 +644,8 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                     on_partial=input_partial,on_endpoint=input_endpoint,on_final=input_final,on_error=input_error)
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":session.output_rate,
                              'engine':selected_engine,'streaming_speech':session.streaming_speech,
-                             'voice_verification':not session.streaming_speech and bool(getattr(services,'verify_voice',False)),
+                             'voice_verification':not session.streaming_speech and verification_before_playback(services),
+                             'voice_playback':'streaming' if session.streaming_speech or streams_voice(services) else 'checked',
                              "artwork_images":"dialogue-v2", "image_status":True,
                              "endpoint_ms":300 if experimental is not None else detector.silence_frames * 20,
                              "turn_taking":("Speak to interrupt; Stop reply remains available" if interruptions

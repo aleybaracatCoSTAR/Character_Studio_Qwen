@@ -1,6 +1,6 @@
 # Whole-reply completion and consistent emotion
 
-Updated 5 November 2026. The current policy is one continuous voice take per complete reply, with one fixed emotion and reference. The earlier sentence-level natural-delivery retry was reported to create unwanted mood changes and has been removed. [Voice failure diagnosis](VOICE_FAILURES.md) describes word checks, conservative quiet-tail trimming and separate generation/checking timings. The real-model comparisons below describe the earlier cue-format tests, not validation of the current recovery rules or sampler.
+Updated 6 November 2026. The live app now defaults to immediate PCM playback (`drama-stream-v1`); the policy below describes the retained `LIVE_VOICE_PLAYBACK=checked` mode. See [streaming behaviour and comparison](DRAMA3_LATENCY.md#live-playback-mode). The current policy is one continuous voice take per complete reply, with one fixed emotion and reference. The earlier sentence-level natural-delivery retry was reported to create unwanted mood changes and has been removed. [Voice failure diagnosis](VOICE_FAILURES.md) describes word checks, conservative quiet-tail trimming and separate generation/checking timings. The real-model comparisons below describe the earlier cue-format tests, not validation of the current recovery rules or sampler.
 
 The later [sampling correction](DRAMA3_SAMPLING.md) separates main/acoustic top-k and masks residual codes outside the decoder's 1,024-entry vocabulary. Historical listening results below used the previous sampler; they do not validate the new policy.
 

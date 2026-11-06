@@ -221,8 +221,8 @@ class VoiceVerificationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VoiceVerificationAppTests(unittest.TestCase):
-    def test_default_preview_reports_verification_enabled_without_loading_or_contacting_models(self):
-        with patch.dict(os.environ, {'LIVE_VERIFY_VOICE':'1'}), patch('live_voice.providers.SpeechRecognition.load') as load:
+    def test_checked_preview_reports_verification_enabled_without_loading_or_contacting_models(self):
+        with patch.dict(os.environ, {'LIVE_VERIFY_VOICE':'1','LIVE_VOICE_PLAYBACK':'checked'}), patch('live_voice.providers.SpeechRecognition.load') as load:
             app = create_app(preview=True, archive_store=object(), archive_importer=object())
             with TestClient(app) as client:
                 status = client.get('/api/status').json()

@@ -2,7 +2,7 @@
 
 The current checked conversation path receives streaming audio from Drama 3, but collects the entire take and checks spoken-word coverage before sending playable PCM to the browser. Its first audible response therefore includes synthesis completion, checking, and any permitted retry, as well as recognition, archive retrieval and director/actor work before TTS starts. `stream: true` at the model endpoint alone does not make this client path low-latency.
 
-This direct benchmark bypasses recognition, archives, director and actor. It measures the first raw PCM packet and transport completion. It does not measure physical speaker onset or verify that every word was spoken. The existing checked conversation mode is unchanged.
+This direct benchmark bypasses recognition, archives, director and actor. It measures the first raw PCM packet and transport completion. It does not measure physical speaker onset or verify that every word was spoken. The checked conversation mode remains available as a server option.
 
 ## Start the existing Fish stack
 
@@ -54,7 +54,27 @@ Listen for missing opening/closing words, changes in voice, and long silent tail
 * Slow direct first PCM: investigate warmup, reference encoding, queueing, serving configuration and GPU load before changing the character LLM.
 * Fast first PCM but long completion/silence: inspect the audio and generation ending. A higher token cap can extend silent tails; it is not a general latency fix.
 
-For a lower-latency conversational mode, the next architectural change is forwarding PCM as it arrives. It can keep one fixed voice/emotion per reply, but cannot promise full-reply word verification before the listener hears it, and must not retry a whole reply after partial playback. Keep that as an explicit alternative to the checked mode rather than silently changing its completion behaviour. Incremental sentence synthesis additionally needs a separate continuity test because earlier experiments changed delivery or skipped words between chunks.
+## Live playback mode
+
+The live app now defaults to `LIVE_VOICE_PLAYBACK=streaming`. It sends valid 44.1 kHz PCM deltas to the browser as they arrive, using one full-text synthesis request, one frozen voice reference and one emotion for the whole reply. It still waits for the actor's final text; no sentence-level voice resets were introduced. The browser keeps its existing 120 ms prebuffer and native sample rate.
+
+Speech checking occurs after deltas have been released. It can detect a problem but cannot prevent the listener hearing it. A failed or capped stream never automatically restarts after any PCM has been sent. The incomplete reply cannot be acknowledged as a fully heard conversation turn; use a new participant turn after the error. Interrupting cancels the owned request.
+
+`/api/status` identifies `voice_pipeline: drama-stream-v1`; the engine picker says **live playback**, and the timing line says **Drama 3 streaming**. `voice_verification: false` means no word check before playback; when `LIVE_VERIFY_VOICE=1` the existing post-stream speech check remains enabled. First-audio delivery and final voice/checking totals are reported separately. No new real-GPU improvement is claimed until the restarted app is measured.
+
+To retain the older mode that withholds every take until verification, submit with:
+
+```bash
+LIVE_VOICE_PLAYBACK=checked sbatch scripts/run_live_slurm.sbatch --listening baseline
+```
+
+To use the faster mode explicitly:
+
+```bash
+LIVE_DEFAULT_ENGINE=baseline LIVE_VOICE_PLAYBACK=streaming sbatch scripts/run_live_slurm.sbatch --listening baseline
+```
+
+Stop the actual old job and pull before submitting a replacement. Keep listening mode unchanged for comparison. No dependencies or model downloads changed. Full-reply generation and checking durations still exist but no longer block first playback in streaming mode.
 
 ## Published numbers and scope
 

@@ -251,3 +251,55 @@ test('missing collections, empty results and failed search do not invent an artw
   const failed=setup({fetcher:async()=>({ok:false,status:503})});assert.equal(await failed.gallery.search('Monet'),false);
   assert.match(failed.document.getElementById('gallery-search-status').textContent,/could not be searched/);assert.equal(failed.reveal.shows.length,0);
 });
+
+test('gallery selection feedback names the central artwork among several retrieved candidates',()=>{
+  const {gallery,loaded,statuses,document}=setup();gallery.setTurn(1);
+  const records=[entry('a'.repeat(32),{title:'The Expulsion from Eden'}),
+    entry('b'.repeat(32),{title:'Musicians (Musikanten)',image_url:'https://museum.example/woodcut.jpg'})];
+  gallery.accept(source(1,{image_request:false,gallery_display:true}),records);loaded();
+  assert.deepEqual(statuses.at(-1),{type:'image_status',turn_id:1,status:'loaded',loaded_count:1,total_count:1,
+    selected:{collection_id:'national-gallery-of-art',id:'a'.repeat(32)}});
+  document.getElementById('gallery-thumbnails').children[1].emit('click');loaded();
+  assert.deepEqual(statuses.at(-1).selected,{collection_id:'national-gallery-of-art',id:'b'.repeat(32)});
+  assert.equal(document.getElementById('gallery-title').textContent,'Musicians (Musikanten)');
+});
+
+test('a resolved woodcut followup replaces Eden with the selected woodcut and reports that exact record',()=>{
+  const {gallery,loaded,statuses,document,reveal}=setup();gallery.setTurn(1);
+  gallery.accept(source(1,{gallery_display:true}),[entry('a'.repeat(32),{title:'The Expulsion from Eden'})]);loaded();
+  gallery.setTurn(2);
+  const woodcut=entry('b'.repeat(32),{title:'Musicians (Musikanten)',image_url:'https://museum.example/musicians.jpg',metadata:{medium:'woodcut'}});
+  gallery.accept(source(2,{gallery_display:true}),[woodcut]);loaded();
+  assert.equal(document.getElementById('gallery-title').textContent,'Musicians (Musikanten)');
+  assert.equal(reveal.shows.at(-1).url,'https://museum.example/musicians.jpg');
+  assert.deepEqual(statuses.at(-1).selected,{collection_id:woodcut.collection_id,id:woodcut.id});
+  assert.equal(document.getElementById('gallery-thumbnails').children.length,2);
+});
+
+test('an unmatched requested selection clears unrelated central art while retaining visit thumbnails',()=>{
+  const {gallery,loaded,statuses,document,reveal,image}=setup();gallery.setTurn(1);
+  gallery.accept(source(),[entry('a'.repeat(32),{title:'The Expulsion from Eden'})]);loaded();
+  const oldCallback=[...image.listeners.get('load')][0];
+  gallery.setTurn(2);const before=statuses.length;
+  assert.equal(gallery.accept(source(2),[]),true);
+  assert.equal(gallery.selected,null);assert.equal(image.parentNode.hidden,true);
+  assert.equal(document.getElementById('gallery-title').textContent,'No artwork selected');
+  assert.equal(document.getElementById('gallery-source').hidden,true);
+  assert.equal(document.getElementById('gallery-thumbnails').children.length,1);
+  assert.match(document.getElementById('gallery-empty').textContent,/No matching artwork/);
+  oldCallback();assert.equal(statuses.length,before);assert.equal(reveal.clears,1);
+});
+
+test('same candidates in a new rank preserve the server-confirmed central artwork identity',()=>{
+  const {gallery,loaded,document,reveal}=setup();gallery.setTurn(1);
+  const first=entry('a'.repeat(32),{title:'The Expulsion from Eden'}),second=entry('b'.repeat(32),{title:'Musicians (Musikanten)',image_url:'https://museum.example/woodcut.jpg'});
+  gallery.accept(source(1,{gallery_display:true}),[first,second]);loaded();
+  document.getElementById('gallery-thumbnails').children[1].emit('click');loaded();
+  const before=reveal.shows.length;gallery.setTurn(2);
+  gallery.accept(source(2,{gallery_display:true,gallery_selected:{collection_id:second.collection_id,id:second.id}}),[first,second]);
+  assert.equal(document.getElementById('gallery-title').textContent,second.title);
+  assert.equal(reveal.shows.length,before);
+  // An injected selection outside these records never opens an arbitrary URL.
+  gallery.setTurn(3);gallery.accept(source(3,{gallery_display:true,gallery_selected:{collection_id:'other',id:'private'}}),[first,second]);
+  assert.equal(document.getElementById('gallery-title').textContent,second.title);
+});

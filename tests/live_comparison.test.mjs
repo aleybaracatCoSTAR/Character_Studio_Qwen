@@ -23,6 +23,14 @@ function profile(name='Robin'){return {character:{name,role:'Art guide',about:'A
   voice:{preset:'automatic',emotion:'calm',event:'none',direction:'Warm and measured.'},director:{enabled:true,notes:'Stay grounded.'},trigger:null,
   narrative:{enabled:false,mode:'manual',beats:[]},archive:{enabled:true,scope:'library',entry_ids:[],collection_ids:['national-gallery-of-art']}};}
 function capabilities(default_engine='baseline',baseline=true,omni=true){return {default_engine,engines:{baseline:{available:true,ready:baseline},'qwen-omni':{available:omni,ready:omni}}};}
+
+test('Drama streaming playback is visible separately from native Omni',()=>{
+  const {comparison,nodes}=setup();const value=capabilities();
+  value.engines.baseline.voice_playback='streaming';comparison.setCapabilities(value);
+  assert.match(nodes.get('comparison-engine').children[0].textContent,/Drama 3.*live playback/);
+  assert.doesNotMatch(nodes.get('comparison-engine').children[1].textContent,/live playback/);
+  assert.equal(comparison.engine(),'baseline');
+});
 function start(comparison,{engine='baseline',id='robin',input='text',settings=profile(),turn=1,prompt='Tell me about the painting.'}={}){
   comparison.setCapabilities(capabilities(engine));comparison.selected=engine;
   assert.equal(comparison.beginCall({id,profile:settings,input}),true);

@@ -1,5 +1,6 @@
 import asyncio
 import copy
+from contextlib import aclosing
 import json
 import logging
 import math
@@ -13,12 +14,14 @@ from .recognition import PreparedRecognition
 from .inspection import RequestInspection
 from .voice import EMOTION_DIRECTIONS, spoken_text_clean
 from .voice_progress import observe_voice_progress, voice_timing_metrics
+from .playback_policy import streams_voice, voice_pipeline, verification_before_playback
 from .turns import ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
 from .archive import retrieve, grounding_messages
 from .collections import collection_grounding_messages
 from .artwork_requests import (image_request, image_context, image_reference_ack,
-    image_confirmation, image_offer, image_reference_question, image_capability_context)
+    image_confirmation, image_offer, image_reference_question, image_capability_context,
+    image_correction_request, image_reference_selection, plural_image_reference)
 
 logger = logging.getLogger(__name__)
 
@@ -92,21 +95,31 @@ class LiveSession:
         self.image_display = None
 
     def image_status(self, value):
-        """Accept bounded current-request browser feedback without starting a reply."""
+        """Accept current source IDs and bounded rendering feedback, never a model turn."""
         if not isinstance(value,dict) or self.closed or self.image_display is None: return False
         turn, loaded, total = value.get('turn_id'), value.get('loaded_count'), value.get('total_count')
         status = value.get('status')
+        selected = value.get('selected')
+        selected_key = None
+        if selected is not None:
+            if not self.gallery_greeting or not isinstance(selected,dict): return False
+            selected_key = (selected.get('collection_id'),selected.get('id'))
+            if (not all(isinstance(part,str) for part in selected_key)
+                    or selected_key not in self.image_display.get('image_keys',self.image_display['keys'])): return False
+        expected_total = 1 if selected_key else self.image_display['total_count']
         if (type(turn) is not int or turn!=self.turn_id or turn!=self.image_display['turn_id']
                 or type(loaded) is not int or type(total) is not int or not 0<=loaded<=total<=3
-                or total!=self.image_display['total_count']
+                or total!=expected_total
                 or status not in ('loading','loaded','unavailable')
                 or status=='loading' and (loaded!=0 or total==0)
                 or status=='loaded' and loaded==0
                 or status=='unavailable' and loaded!=0): return False
         previous = self.image_display['status']
-        # A delayed loading/error notification cannot erase a successful load.
-        if previous=='loaded' and (status!='loaded' or loaded<self.image_display['loaded_count']): return False
+        same_selection = selected_key == self.image_display.get('selected_key')
+        # A delayed error may not erase a successful load of the same image.
+        if same_selection and previous=='loaded' and (status!='loaded' or loaded<self.image_display['loaded_count']): return False
         self.image_display.update(status=status,loaded_count=loaded)
+        if selected_key: self.image_display['selected_key'] = selected_key
         return True
 
     @staticmethod
@@ -117,7 +130,8 @@ class LiveSession:
         state = self.image_display
         if state is None: return None
         keys = self._image_keys(matches)
-        return state['status'] if keys and keys.issubset(state['keys']) else None
+        displayed = {state['selected_key']} if state.get('selected_key') else state['keys']
+        return state['status'] if keys and keys.issubset(displayed) else None
 
     async def story_state(self):
         if self.story.revision != self.story_seen_revision:
@@ -357,7 +371,7 @@ class LiveSession:
             archive_started = time.perf_counter()
             if self.archive and not introduction_only(text,visitor_introduction):
                 scope = self.archive.scope
-                requested_image = image_request(text) if not action else None
+                requested_image = (image_correction_request(text) or image_request(text)) if not action else None
                 offered = copy.deepcopy(self.pending_image_offer)
                 self.pending_image_offer = []
                 confirmed = not action and not requested_image and offered and image_confirmation(text)
@@ -368,6 +382,17 @@ class LiveSession:
                 search_history = () if requested_image else director_context
                 reuse = bool(requested_image and requested_image['followup'] or reference_followup)
                 previous_matches = offered if confirmed else self.last_archive_matches
+                selected_key = (self.image_display or {}).get('selected_key')
+                if (reuse and self.gallery_greeting and selected_key and not confirmed
+                        and not plural_image_reference(text)):
+                    selected_matches = [match for match in previous_matches
+                        if (match.get('collection_id'),match.get('id')) == selected_key]
+                    if selected_matches: previous_matches = selected_matches
+                selected_reference = (image_reference_selection(requested_image,previous_matches)
+                                      if self.archive.collection_ids else None)
+                if selected_reference is not None:
+                    reuse = True
+                    previous_matches = selected_reference
                 if scope == 'library':
                     if self.archive_search is None: raise ValueError('The local archive snapshot is unavailable.')
                     matches = (copy.deepcopy(previous_matches) if reuse
@@ -384,18 +409,46 @@ class LiveSession:
                 if self.archive.collection_ids:
                     archive_context[0] = {**archive_context[0], 'content':archive_context[0]['content']+'\n\n'+
                         image_capability_context(matches,state=self._image_state_for(matches))}
+                    if self.gallery_greeting:
+                        display = self.image_display or {}
+                        selected_key = display.get('selected_key')
+                        selected_is_current = selected_key in self._image_keys(matches) if selected_key else False
+                        requested_match = (next((match for match in matches
+                            if (match.get('collection_id'),match.get('id')) == selected_key),None) if selected_is_current else None)
+                        requested_match = requested_match or next((match for match in matches if match.get('image_url')),None) or (matches[0] if matches else None)
+                        gallery_selected = ({'collection_id':requested_match['collection_id'],'id':requested_match['id']}
+                                            if requested_match else None)
+                        payload = json.loads(archive_context[1]['content'])
+                        payload['gallery_display'] = {'status':display.get('status','unconfirmed') if selected_is_current else 'unconfirmed',
+                            'selected':{'collection_id':selected_key[0],'id':selected_key[1]} if selected_is_current else None,
+                            'requested':gallery_selected}
+                        archive_context[1] = {**archive_context[1],'content':json.dumps(payload,ensure_ascii=False,separators=(',',':'))}
+                        archive_context[0] = {**archive_context[0],'content':archive_context[0]['content']+
+                            '\nThe gallery_display field identifies the browser-confirmed central artwork only when supplied. '
+                            'Its requested field identifies the exact central selection requested for this retrieval; another source record is not automatically the central artwork. '
+                            'Never say "you are looking at" a title unless that exact source is confirmed loaded; otherwise acknowledge the requested selection without claiming it is visible. '
+                            'Do not invent depicted instruments, people, composition or colours from an artwork title or your earlier replies. Use only supplied catalogue description and metadata.'}
                 if requested_image:
                     archive_context.append({'role':'system','content':image_context(requested_image,matches)})
                 self.last_archive_context = archive_context
                 source_event = {'type':'archive_sources','turn_id':turn_id,'scope':scope,
                                 'selected_count':count,'matches':matches}
                 if self.archive.collection_ids: source_event['collection_ids'] = self.archive.collection_ids
+                if self.gallery_greeting and self.archive.collection_ids:
+                    source_event['gallery_display'] = True
+                    source_event['gallery_selected'] = gallery_selected
                 if requested_image: source_event['image_request'] = True
-                await self.send_json(source_event)
-                if requested_image:
+                previous_display = self.image_display
+                if requested_image or self.gallery_greeting and self.archive.collection_ids:
                     self.image_display = {'turn_id':turn_id,'keys':self._image_keys(matches),
+                        'image_keys':self._image_keys([match for match in matches if match.get('image_url')]),
                         'total_count':sum(bool(match.get('image_url')) for match in matches[:3]),
                         'loaded_count':0,'status':'sent'}
+                try:
+                    await self.send_json(source_event)
+                except BaseException:
+                    self.image_display = previous_display
+                    raise
                 # Only published references become the next visual referent.
                 # A brief acknowledgement does not replace the artwork topic.
                 if matches or requested_image or not image_reference_ack(text):
@@ -511,7 +564,6 @@ class LiveSession:
             # sentence requests can drift even with identical emotion labels.
             # The phrase ID remains 0 for wire/backward compatibility, and is
             # acknowledged only after the entire reply has actually played.
-            self.history.add_phrase(0, reply)
             speech = spoken_input(reply, delivery, first_phrase=True)
             self.retryable_voice = {'turn_id':turn_id, 'revision':self.story.revision, 'reply':reply,
                                     'speech':speech, 'reference':tuple(self.reference) if self.reference else None,
@@ -585,7 +637,10 @@ class LiveSession:
 
     async def speak_reply(self, take, metrics, started):
         turn_id, reply = take['turn_id'], take['reply']
-        await self.send_json({"type":"phrase_start", "turn_id":turn_id, "seq":0, "text":reply})
+        metrics.update(voice_pipeline=voice_pipeline(self.providers),
+                       voice_verification=verification_before_playback(self.providers))
+        await self.send_json({"type":"phrase_start", "turn_id":turn_id, "seq":0, "text":reply,
+                              'streaming':streams_voice(self.providers)})
         tts_started = time.perf_counter()
         reference_audio = bytearray()
         audio_bytes = audio_chunks = 0
@@ -594,19 +649,22 @@ class LiveSession:
         async def voice_progress(event):
             await self.send_json({'type':'voice_progress','turn_id':turn_id,**event})
         with observe_voice_progress(voice_progress):
-            async for chunk in self.providers.audio(take['speech'], take['reference'], on_notice=voice_notice):
-                take['audio_started'] = True
-                if "tts_first_chunk_ms" not in metrics:
-                    metrics.update(voice_timing_metrics(getattr(self.providers,'last_voice_metrics',None)))
-                    metrics["tts_first_chunk_ms"] = round((time.perf_counter() - tts_started) * 1000)
-                    metrics["speech_end_to_first_audio_ms"] = round((time.perf_counter() - started) * 1000)
-                    metrics['first_audio_ms'] = metrics['speech_end_to_first_audio_ms']
-                    metrics['voice_pipeline'] = 'voice-checked-v5'
-                    metrics['voice_verification'] = bool(getattr(self.providers,'verify_voice',False))
-                    await self.send_json({"type":"metrics", "turn_id":turn_id, **metrics})
-                if take['reference'] is None: reference_audio.extend(chunk)
-                audio_bytes += len(chunk); audio_chunks += 1
-                await self.send_bytes(struct.pack("!II", turn_id, 0) + chunk)
+            async with aclosing(self.providers.audio(take['speech'], take['reference'], on_notice=voice_notice)) as audio:
+                async for chunk in audio:
+                    take['audio_started'] = True
+                    if "tts_first_chunk_ms" not in metrics:
+                        metrics.update(voice_timing_metrics(getattr(self.providers,'last_voice_metrics',None)))
+                        metrics["tts_first_chunk_ms"] = round((time.perf_counter() - tts_started) * 1000)
+                        metrics["speech_end_to_first_audio_ms"] = round((time.perf_counter() - started) * 1000)
+                        metrics['first_audio_ms'] = metrics['speech_end_to_first_audio_ms']
+                        await self.send_json({"type":"metrics", "turn_id":turn_id, **metrics})
+                    if take['reference'] is None: reference_audio.extend(chunk)
+                    audio_bytes += len(chunk); audio_chunks += 1
+                    await self.send_bytes(struct.pack("!II", turn_id, 0) + chunk)
+        # No client acknowledgement may save a partially generated stream as
+        # heard speech. The complete phrase becomes acknowledgeable only now.
+        self.history.add_phrase(0, reply)
+        metrics.update(voice_timing_metrics(getattr(self.providers,'last_voice_metrics',None)))
         if take['reference'] is None and reference_audio:
             self.reference = synthetic_reference(bytes(reference_audio), reply)
             if self.reference is None:
@@ -641,10 +699,20 @@ class LiveSession:
             message = ('The Qwen3-Omni stream did not finish. Some audio may already have played. '
                        'The incomplete reply is not saved as a heard conversation turn. Check the Omni service log and try again.')
             can_retry = False
+        elif streams_voice(self.providers) and take and take.get('audio_started'):
+            detail = voice_failure.safe_summary() if voice_failure else 'the audio stream was interrupted'
+            message = ("The streamed voice did not finish: " + detail +
+                       ". Some audio may already have played. The incomplete reply is not saved as heard, "
+                       "and it will not restart automatically. Your voice and emotion settings have not changed.")
         elif isinstance(exc, VoiceServiceUnavailable): message = str(exc) + ' Details: ' + exc.safe_summary() + '.'
         elif isinstance(exc, VoiceTakeIncomplete):
-            message = ("The voice take did not finish: " + exc.safe_summary() +
-                       ". The delivery has not been changed. Use Retry voice to keep this reply's words, emotion and voice settings.")
+            if take and take.get('audio_started'):
+                message = ("The streamed voice did not finish: " + exc.safe_summary() +
+                           ". Some audio may already have played. The incomplete reply is not saved as heard, "
+                           "and it will not restart automatically. Your voice and emotion settings have not changed.")
+            else:
+                message = ("The voice take did not finish: " + exc.safe_summary() +
+                           ". The delivery has not been changed. Use Retry voice to keep this reply's words, emotion and voice settings.")
         elif voice_failure and voice_failure.reason == 'verification_unavailable':
             message = 'The voice was generated, but the speech check could not finish. Check speech recognition before retrying; no unchecked audio was played.'
         elif voice_failure:

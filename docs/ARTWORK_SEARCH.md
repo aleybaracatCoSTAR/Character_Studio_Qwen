@@ -54,3 +54,8 @@ Pull and restart the existing app using the [Surrey setup](LIVE_SETUP.md), then 
 Implementation: `live_voice/artwork_retrieval.py` ranks canonical fields; `artwork_requests.py` classifies explicit display requests; `session.py` owns the call-local visual reference; `frontend/live-artwork.mjs` renders inline cards and separate-view links. Original source boundaries and per-character collection restrictions remain in place. Validation evidence is recorded in [HANDOFF.md](HANDOFF.md).
 
 ![Real NGA retrieval in the inline image view; labelled CPU interface test without AI models](screenshots/artwork-request-preview.jpg)
+
+
+## Gallery selection and spoken media
+
+`Can I see the woodcut?` and recognized `and I see the wood cut` select a matching supplied medium rather than search the word `image` or preserve an unrelated central picture. Corrections such as `you're showing me Eden, not the music one` resolve the desired reference without searching the rejected title. Ambiguous records remain candidates. A selected source ID is shared by gallery and actor, with browser loading feedback tied to that identity; catalogue evidence is not visual inspection. No match clears the old image. A record without an eligible image keeps its own title and source link rather than substituting a different artwork. Accession numbers are not creation dates.

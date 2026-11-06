@@ -10,7 +10,7 @@ import re
 from urllib.parse import urlsplit
 
 
-_IMAGE_WORD = re.compile(r'\b(?:images?|pictures?|photos?|photographs?|artworks?|paintings?)\b', re.I)
+_IMAGE_WORD = re.compile(r'\b(?:images?|pictures?|photos?|photographs?|artworks?|paintings?|woodcuts?|engravings?|etchings?|prints?|drawings?|sculptures?|watercolou?rs?|lithographs?)\b', re.I)
 _TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)?", re.UNICODE)
 _QUOTED = re.compile(r'''"[^"\n]{1,300}"|“[^”\n]{1,300}”|(?<!\w)'[^'\n]{1,300}'(?!\w)''')
 _FILLERS = re.compile(r'^\s*(?:(?:uh+|um+|erm|er|hmm+|well|oh|so|hey)\b[\s,…]*){1,8}', re.I)
@@ -103,6 +103,10 @@ def image_request(text):
     if any((ord(char) < 32 and not char.isspace()) or ord(char) == 127 for char in text):
         return None
     text = _FILLERS.sub('', text, count=1).strip()
+    # A common ASR rendering of 'can I see the woodcut' in this dialogue.
+    # Keep the ordinary statement 'I see the image' outside display commands.
+    text = re.sub(r'^and\s+i\s+see\b', 'can I see', text, flags=re.I)
+    text = re.sub(r'\bwood\s+cuts?\b', lambda part:'woodcuts' if part.group().lower().endswith('cuts') else 'woodcut', text, flags=re.I)
     repair = _VISIBILITY_REPAIR.match(text)
     if repair and _VISIBLE_OBJECT.match(repair['object']):
         text = 'show ' + repair['object']
@@ -371,3 +375,75 @@ def image_offer(text, matches):
             return None
         selected = candidates
     return tuple((value['collection_id'], value['id']) for value in selected)
+
+
+# Select only from this call's supplied candidates. These rules resolve a
+# reference, not a new catalogue search or a model-generated image URL.
+_SELECTION_FILL = _STOP | frozenset("one ones work works piece pieces music musical".split())
+_SELECTION_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+_MEDIUM = frozenset("woodcut engraving etching print drawing sculpture watercolor watercolour lithograph".split())
+_WRONG_DISPLAY = re.compile(
+    r"^(?:no[,.!]?\s*)?(?:you(?:['’]re|\s+are)\s+(?:still\s+)?showing\s+(?:me\s+)?|"
+    r"(?:this|that)(?:['’]s|\s+is)\s+)(?P<wrong>.+?)\s+(?:but\s+)?not\s+(?P<wanted>.+)$", re.I)
+_REQUESTED_NOT = re.compile(
+    r"^(?:no[,.!]?\s*)?i\s+(?:asked\s+for|wanted|requested)\s+(?P<wanted>.+?)\s+(?:but\s+)?not\s+.+$", re.I)
+
+
+def _selection_words(value):
+    from .artwork_retrieval import fold
+    value = re.sub(r'\bwood\s+cuts?\b', 'woodcut', fold(value))
+    tokens = {part.group() for part in _SELECTION_WORD.finditer(value)}
+    # These two forms describe the same subject without inventing a new name.
+    tokens = {'music' if token in ('musicians', 'musician', 'musical') else token for token in tokens}
+    return {token[:-1] if token.endswith('s') and token[:-1] in _MEDIUM else token for token in tokens}
+
+
+def image_correction_request(text):
+    """Extract the desired half of a correction, never search its rejected title."""
+    if not isinstance(text,str) or not 0 < len(text) <= 4000:
+        return None
+    value = _FILLERS.sub('', text, count=1).strip()
+    match = _WRONG_DISPLAY.match(value) or _REQUESTED_NOT.match(value)
+    if match is None:
+        return None
+    wanted = match['wanted'].strip(" .?!,;:")
+    if not wanted:
+        return None
+    return {'query':wanted,'followup':False,'correction':True}
+
+
+def image_reference_selection(request, matches):
+    """Return a bounded known subset, [] for an unresolved local descriptor, or None.
+
+    Every identifying query term must be supported by title, artist or medium.
+    Multiple woodcuts remain multiple; no ranking guess silently selects one.
+    New unmatched proper names return None so normal fresh retrieval can run.
+    """
+    if (not isinstance(request,dict) or not isinstance(request.get('query'),str)
+            or not 0 < len(request['query']) <= 4000 or not isinstance(matches,(list,tuple))):
+        return None
+    query = _selection_words(request['query'])
+    # Keep music as a content word; it aliases musicians, not all art.
+    content = query - (_SELECTION_FILL - {'music'})
+    if not content:
+        return [] if request.get('correction') else None
+    candidates = []
+    for match in matches[:3]:
+        if not isinstance(match,dict): continue
+        metadata = match.get('metadata') if isinstance(match.get('metadata'),dict) else {}
+        fields = [match.get('title',''),metadata.get('artist',''),metadata.get('medium',''),metadata.get('classification','')]
+        supported = set().union(*(_selection_words(value) for value in fields if isinstance(value,str)))
+        if content.issubset(supported): candidates.append(match)
+    if candidates:
+        return candidates
+    # A generic 'the woodcut' or 'the music one' refers to this dialogue's
+    # options, not an unrelated top-ranked item in a million-record catalogue.
+    if content.issubset(_MEDIUM | {'music'}):
+        return []
+    return None
+
+
+def plural_image_reference(text):
+    """A plural follow-up retains its candidates rather than only the central image."""
+    return bool(isinstance(text,str) and re.search(
+        r'\b(?:them|they|their|these|those|both|all|images|pictures|photos|photographs|artworks|paintings|ones)\b',text,re.I))

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import binascii
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import aclosing
 from dataclasses import dataclass
 from io import BytesIO
 import json
@@ -61,7 +62,7 @@ def _safe_voice_metadata(values):
         if key in _VOICE_NUMERIC_FIELDS and type(value) in (int, float):
             if 0 <= value <= 1_000_000_000 and math.isfinite(value): safe[key] = value
         elif key in ('done_received', 'service_partial_audio', 'speech_detected', 'clean_ending',
-                     'ordered_prefix', 'active_ending', 'recovered_after_limit') and type(value) is bool:
+                     'ordered_prefix', 'active_ending', 'recovered_after_limit', 'audio_delivered') and type(value) is bool:
             safe[key] = value
         elif key == 'service_code' and type(value) is int and 100 <= value <= 599:
             safe[key] = value
@@ -238,7 +239,9 @@ class SpeechRecognition:
 class LocalProviders:
     def __init__(self, stt, llm_url="http://127.0.0.1:18092", tts_url="http://127.0.0.1:18093", transport=None,
                  director_url=None, director_model="live-character", llm_model="live-character", director_timeout=6,
-                 verify_voice=False, verification_timeout=20):
+                 verify_voice=False, verification_timeout=20, voice_playback='checked'):
+        if voice_playback not in ('checked', 'streaming'):
+            raise ValueError('Use checked or streaming voice playback.')
         self.stt = stt
         self.llm_url = llm_url.rstrip("/")
         self.tts_url = tts_url.rstrip("/")
@@ -247,6 +250,7 @@ class LocalProviders:
         self.llm_model = llm_model
         self.director_timeout = max(2,min(60,float(director_timeout)))
         self.verify_voice = bool(verify_voice)
+        self.voice_playback = voice_playback
         self.verification_timeout = max(2,min(60,float(verification_timeout)))
         self.last_voice_check = None
         self.last_voice_metrics = {}
@@ -312,7 +316,7 @@ class LocalProviders:
         content = body["choices"][0]["message"]["content"]
         return TriggerDecision.model_validate_json(content)
 
-    async def _voice_take(self, text, reference, *, token_budget=None):
+    async def _voice_take(self, text, reference, *, token_budget=None, on_chunk=None):
         budget = speech_token_budget(text) if token_budget is None else token_budget
         if type(budget) is not int or not 1 <= budget <= 1600:
             raise ValueError('Use a bounded voice generation budget.')
@@ -324,6 +328,7 @@ class LocalProviders:
         await record_request('tts', payload)
         started = time.perf_counter()
         pcm = bytearray()
+        forwarded = 0
         limit = speech_audio_limit(payload['max_new_tokens'])
         stats = {'budget_tokens':payload['max_new_tokens'], 'audio_limit_bytes':limit,
                  'audio_bytes':0, 'audio_chunks':0, 'events':0, 'done_received':False,
@@ -375,8 +380,20 @@ class LocalProviders:
                         stats['audio_bytes'] = len(pcm)
                         if pcm and 'first_audio_ms' not in stats:
                             stats['first_audio_ms'] = round((time.perf_counter()-started)*1000)
+                            self.last_voice_metrics['first_audio_ms'] = stats['first_audio_ms']
                         if len(pcm) > limit:
                             raise VoiceTakeIncomplete('Voice phrase exceeded the live audio limit.', reason='audio_limit')
+                        if on_chunk is not None and len(pcm) >= 4:
+                            if pcm.startswith(b'RIFF'):
+                                raise VoiceProtocolError('Expected PCM, received WAV.', reason='wav_instead_of_pcm')
+                            # SSE events can split a sample. Retain that last
+                            # byte until the following event, without losing or
+                            # changing samples at network packet boundaries.
+                            aligned = len(pcm) - len(pcm) % 2
+                            while forwarded < aligned:
+                                end = min(aligned, forwarded + 16384)
+                                await on_chunk(bytes(pcm[forwarded:end]))
+                                forwarded = end
                     elif kind == 'speech.audio.done':
                         stats['done_received'] = True
                         stats.update(_safe_voice_metadata({'finish_reason':event.get('finish_reason')}))
@@ -404,6 +421,8 @@ class LocalProviders:
                     raise VoiceTakeIncomplete('Drama 3 returned unaligned voice audio.', reason='unaligned_audio')
                 if pcm.startswith(b'RIFF'):
                     raise VoiceProtocolError('Expected PCM, received WAV.', reason='wav_instead_of_pcm')
+                if on_chunk is not None and forwarded < len(pcm):
+                    await on_chunk(bytes(pcm[forwarded:]))
                 stats.update(audio_seconds=round(len(pcm)/(2*OUTPUT_RATE),3),
                              elapsed_ms=round((time.perf_counter()-started)*1000))
                 return _VoiceTake(bytes(pcm), limited, _safe_voice_metadata(stats))
@@ -454,6 +473,11 @@ class LocalProviders:
         ending; only confirmed trailing silence can be removed. A clean active
         prefix can grant the second attempt more tokens, never another attempt.
         """
+        if self.voice_playback == 'streaming':
+            async with aclosing(self._stream_audio(text, reference, on_notice)) as stream:
+                async for part in stream:
+                    yield part
+            return
         # Freeze a caller's mutable reference before the first attempt. Incomplete
         # takes and service failures share one retry, never nested retry loops.
         reference = tuple(reference) if reference else reference
@@ -589,6 +613,131 @@ class LocalProviders:
         await report_voice_progress('ready',**self.last_voice_metrics)
         for start in range(0, len(pcm), 16384):
             yield pcm[start:start + 16384]
+
+    async def _incremental_take(self, text, reference, budget):
+        """Bridge strict SSE decoding into a bounded, cancellable PCM queue.
+
+        The final private take retains completion diagnostics and an optional
+        recognition candidate. Nothing in this path fabricates a completion
+        event or treats an HTTP 200 as proof that the spoken words finished.
+        """
+        queue = asyncio.Queue(maxsize=4)
+        request = asyncio.create_task(self._voice_take(text, reference,
+            token_budget=budget, on_chunk=queue.put))
+        waiting = None
+        try:
+            while not request.done() or not queue.empty():
+                if not queue.empty():
+                    yield queue.get_nowait()
+                    continue
+                waiting = asyncio.create_task(queue.get())
+                completed, _ = await asyncio.wait((request, waiting),
+                                                return_when=asyncio.FIRST_COMPLETED)
+                if waiting in completed:
+                    yield waiting.result()
+                    waiting = None
+                else:
+                    waiting.cancel()
+                    await asyncio.gather(waiting, return_exceptions=True)
+                    waiting = None
+            yield await request
+        finally:
+            if waiting is not None:
+                waiting.cancel()
+            if not request.done():
+                request.cancel()
+            await asyncio.gather(request, *([waiting] if waiting is not None else []),
+                                 return_exceptions=True)
+
+    async def _stream_audio(self, text, reference=None, on_notice=None):
+        """Play a single unchanged voice take as PCM arrives, then check it.
+
+        This is a latency tradeoff, not pre-playback word verification. Once
+        any audio has been delivered, a failure is surfaced without retrying
+        or replaying an already heard prefix. Verification, when requested,
+        runs after synthesis and can still report a speech mismatch.
+        """
+        reference = tuple(reference) if reference else reference
+        self.last_voice_metrics = {'attempt':0, 'synthesis_ms':0, 'verification_ms':0}
+        self.last_voice_check = None
+        budget = speech_token_budget(text)
+        for attempt in range(2):
+            delivered = False
+            take = None
+            transient = False
+            self.last_voice_metrics['attempt'] = attempt + 1
+            self.last_voice_metrics.pop('first_audio_ms', None)
+            await report_voice_progress('generating', attempt=attempt+1)
+            started = time.perf_counter()
+            try:
+                try:
+                    async with aclosing(self._incremental_take(text, reference, budget)) as stream:
+                        async for packet in stream:
+                            if isinstance(packet, _VoiceTake):
+                                take = packet
+                            else:
+                                delivered = True
+                                yield packet
+                finally:
+                    self.last_voice_metrics['synthesis_ms'] += round((time.perf_counter()-started)*1000)
+                if take.limited:
+                    raise VoiceTakeIncomplete('Drama 3 reached the voice generation limit.',
+                        reason='token_limit', metadata=take.metadata)
+                if self.verify_voice:
+                    await report_voice_progress('checking', **self.last_voice_metrics)
+                    await self.check_spoken_reply(text, take.pcm)
+                    self.last_voice_check = {**take.metadata, **(self.last_voice_check or {}),
+                                             'audio_delivered':delivered}
+            except VoiceFailure as exc:
+                exc.add_metadata(attempt=attempt+1, attempts=attempt+1, audio_delivered=delivered)
+                logger.warning('Streaming voice take failed: %s', json.dumps(exc.diagnostic(), sort_keys=True))
+                if delivered or not isinstance(exc, VoiceTakeIncomplete) or attempt:
+                    raise
+                message = ('Voice generation did not start: ' + exc.safe_summary() +
+                           '. Retrying with the same emotion and voice.')
+            except httpx.HTTPStatusError as exc:
+                metadata = {**getattr(exc, 'voice_metadata', {}), 'http_status':exc.response.status_code,
+                            'attempt':attempt+1, 'attempts':attempt+1, 'budget_tokens':budget,
+                            'audio_delivered':delivered}
+                failure = VoiceServiceUnavailable(reason='http_status', metadata=metadata)
+                logger.warning('Streaming voice take failed: %s', json.dumps(failure.diagnostic(), sort_keys=True))
+                if exc.response.status_code not in TRANSIENT_VOICE_STATUSES:
+                    exc.voice_failure = VoiceProtocolError('The voice service rejected the request.',
+                        reason='http_status', metadata=metadata)
+                    raise
+                if delivered or attempt:
+                    raise failure from None
+                transient = True
+                message = ('The voice service is temporarily unavailable: ' + failure.safe_summary() +
+                           '. Retrying with the same emotion and voice.')
+            except TRANSIENT_VOICE_ERRORS as exc:
+                reason = ('transport_timeout' if isinstance(exc, httpx.TimeoutException) else
+                          'transport_protocol' if isinstance(exc, httpx.RemoteProtocolError) else 'transport_network')
+                failure = VoiceServiceUnavailable(reason=reason, metadata={
+                    **getattr(exc, 'voice_metadata', {}), 'attempt':attempt+1,
+                    'attempts':attempt+1, 'budget_tokens':budget, 'audio_delivered':delivered})
+                logger.warning('Streaming voice take failed: %s', json.dumps(failure.diagnostic(), sort_keys=True))
+                if delivered or attempt:
+                    raise failure from None
+                transient = True
+                message = ('The voice service is temporarily unavailable: ' + failure.safe_summary() +
+                           '. Retrying with the same emotion and voice.')
+            except (httpx.LocalProtocolError, httpx.UnsupportedProtocol) as exc:
+                exc.voice_failure = VoiceProtocolError('The voice request could not be sent.',
+                    reason='transport_protocol', metadata={**getattr(exc, 'voice_metadata', {}),
+                        'attempt':attempt+1, 'attempts':attempt+1, 'budget_tokens':budget,
+                        'audio_delivered':delivered})
+                raise
+            else:
+                await report_voice_progress('ready', **self.last_voice_metrics)
+                return
+            if on_notice is not None:
+                await on_notice(message)
+            else:
+                logger.warning(message)
+            await report_voice_progress('retrying', **{**self.last_voice_metrics, 'attempt':attempt+2})
+            if transient:
+                await asyncio.sleep(.25)
 
     async def close(self):
         await self.http.aclose(); self.stt.close()

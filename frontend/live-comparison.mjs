@@ -56,7 +56,8 @@ export class EngineComparison {
       this.renderControls();return;
     }
     this.supported=true;this.engines=Object.fromEntries(Object.keys(ENGINE_LABELS).map(id=>[id,
-      {available:value.engines[id]?.available===true,ready:value.engines[id]?.available===true&&value.engines[id]?.ready===true}]));
+      {available:value.engines[id]?.available===true,ready:value.engines[id]?.available===true&&value.engines[id]?.ready===true,
+       voice_playback:value.engines[id]?.voice_playback==='streaming'?'streaming':'checked'}]));
     if(!this.initialized&&!this.busy){this.selected=validEngine(value.default_engine)&&this.engines[value.default_engine]?.available?value.default_engine:'baseline';this.initialized=true;}
     this.renderControls();
   }
@@ -79,6 +80,7 @@ export class EngineComparison {
     for(const [id,label] of Object.entries(ENGINE_LABELS)){
       const option=this.document.createElement('option');option.value=id;
       option.textContent=label+(this.supported?this.engines[id]?.ready?' · ready':this.engines[id]?.available?' · not ready':' · not configured':'');
+      if(id==='baseline'&&this.engines[id]?.voice_playback==='streaming')option.textContent+=' · live playback';
       option.disabled=id!=='baseline'&&this.engines[id]?.available!==true;select.append(option);
     }
     select.value=previous;select.disabled=this.busy||!this.supported;

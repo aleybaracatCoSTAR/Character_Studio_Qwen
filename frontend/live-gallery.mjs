@@ -106,14 +106,31 @@ export class ArchiveGallery{
   }
   accept(event,matches){
     if(event?.type!=='archive_sources'||!this.turnId||event.turn_id!==this.turnId)return false;
-    const records=galleryRecords(matches);if(!records.length)return false;
+    const records=galleryRecords(matches);
+    if(!records.length){
+      if(event.image_request!==true)return false;
+      // A failed named request must not leave an unrelated work looking like
+      // the image just promised by the character. Keep visit thumbnails.
+      this.imageEpoch++;this.imageCleanup?.();this.reveal.clear();this.selected=null;this.request=null;
+      const image=this.get('gallery-image');image.removeAttribute('src');image.parentNode.hidden=true;
+      this.get('gallery-empty').hidden=false;this.get('gallery-empty').replaceChildren(
+        this.node('span','gallery-kicker','SELECTION NOT FOUND'),this.node('h1','','Which artwork did you mean?'),
+        this.node('p','','No matching artwork was selected from these records. Try its title, artist or medium.'));
+      this.get('gallery-title').textContent='No artwork selected';this.get('gallery-title').title='';this.get('gallery-title').removeAttribute('data-long-title');
+      for(const id of ['gallery-meta','gallery-collection','gallery-rights','gallery-caption','gallery-description'])this.get(id).textContent='';
+      this.get('gallery-source').hidden=true;this.get('gallery-replay').disabled=true;this.renderThumbs();
+      this.get('gallery-search-status').textContent='No matching artwork selected for this request';return true;
+    }
     // A newer retrieval supersedes a slower manual search, but ordinary text
     // updates and duplicate source events never replay the animation.
     this.searchEpoch++;this.controller?.abort();
     this.get('gallery-search-status').textContent=`${records.length} record${records.length===1?'':'s'} retrieved in this conversation`;
-    this.request=event.image_request===true?{turn:this.turnId,keys:new Set(records.filter(item=>item.image_url).map(key)),last:''}:null;
+    this.request=event.image_request===true||event.gallery_display===true?{turn:this.turnId,keys:new Set(records.filter(item=>item.image_url).map(key)),selectedIdentity:event.gallery_display===true,last:''}:null;
     if(this.request&&!this.request.keys.size){try{this.onImageStatus({type:'image_status',turn_id:this.turnId,status:'unavailable',loaded_count:0,total_count:0});}catch(error){}}
-    this.add(records);const selected=records.find(item=>item.image_url)||records[0];
+    this.add(records);
+    const selectedKey=event.gallery_selected;
+    const selected=records.find(item=>selectedKey&&item.collection_id===selectedKey.collection_id&&item.id===selectedKey.id)
+      ||records.find(item=>key(item)===this.selected)||records.find(item=>item.image_url)||records[0];
     this.select(selected);return true;
   }
   add(records){
@@ -164,7 +181,8 @@ export class ArchiveGallery{
     // are not pending central images, and their absence must not hold this
     // request in 'loading' after the selected museum image fails.
     const token=key(entry)+':'+status;if(token===batch.last)return;batch.last=token;
-    try{this.onImageStatus({type:'image_status',turn_id:batch.turn,status,loaded_count:status==='loaded'?1:0,total_count:1});}catch(error){/* A closed call must not break gallery browsing. */}
+    try{this.onImageStatus({type:'image_status',turn_id:batch.turn,status,loaded_count:status==='loaded'?1:0,total_count:1,
+      ...(batch.selectedIdentity?{selected:{collection_id:entry.collection_id,id:entry.id}}:{})});}catch(error){/* A closed call must not break gallery browsing. */}
   }
   async search(query=''){
     const epoch=++this.searchEpoch;this.controller?.abort();this.controller=new AbortController();this.request=null;

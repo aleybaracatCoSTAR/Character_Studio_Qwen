@@ -15,6 +15,7 @@ export function formatVoiceMetrics(data={}){
   const add=(label,value,suffix='')=>{if(value!==null)result.push(`${label}: ${value} ms${suffix}`);};
   if(data.voice_failed===true)result.push('Voice failed');
   else if(data.voice_retry===true)result.push('Voice retry');
+  if(data.voice_pipeline==='drama-stream-v1')result.push('Drama 3 streaming');
   add('Server to audio delivery',time('speech_end_to_first_audio_ms'));
   add('Final pause',time('endpoint_ms'));
   add('Recognition wait',time('stt_ms'),data.streaming_asr===true?' (streaming)':data.recognition_prepared===true?' (started during pause)':'');

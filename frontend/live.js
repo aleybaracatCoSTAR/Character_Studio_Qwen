@@ -60,7 +60,7 @@ function triggerSettings(){return $('trigger-enabled').checked?{
   behaviour:$('trigger-behaviour').value,spoken_cue:$('trigger-cue').value,delivery:$('trigger-delivery').value
 }:null;}
 const replies=conversation.replies;
-const voiceProgress=new VoiceProgress({onState:message=>{if(!streamingSpeech||!streamingAudioQueued)state(message);},onTiming:text=>{$('timing').textContent=text;},onText:text=>{
+const voiceProgress=new VoiceProgress({onState:message=>{if(!streamingAudioQueued)state(message);},onTiming:text=>{$('timing').textContent=text;},onText:text=>{
   if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
   replies.get(currentTurn).content.textContent=text;scrollMessages();
 }});
