@@ -1,7 +1,7 @@
 // A short, local canvas reveal. Cross-origin artwork may taint the canvas,
 // which is harmless here: no pixels are read, exported or uploaded.
 export class PixelateReveal{
-  constructor({canvas,image,reducedMotion,requestFrame,cancelFrame,now,duration=900}={}){
+  constructor({canvas,image,reducedMotion,requestFrame,cancelFrame,now,duration=1250}={}){
     this.canvas=canvas;this.image=image;this.destroyed=false;this.generation=0;
     this.frame=null;this.pending=null;this.source='';this.buffer=null;
     this.opacity=image?.style?.opacity??'';
@@ -10,7 +10,7 @@ export class PixelateReveal{
     this.now=now??(()=>globalThis.performance?.now?.()??Date.now());
     this.reducedMotion=typeof reducedMotion==='function'?reducedMotion:
       ()=>reducedMotion??Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-    this.duration=Number.isFinite(duration)?Math.max(100,Math.min(3000,duration)):900;
+    this.duration=Number.isFinite(duration)?Math.max(100,Math.min(3000,duration)):1250;
     this.loaded=()=>{
       const pending=this.pending;
       if(!pending||pending.generation!==this.generation||!this.matches(pending.source))return;
@@ -118,9 +118,20 @@ export class PixelateReveal{
     if(canvas.width!==backingWidth)canvas.width=backingWidth;
     if(canvas.height!==backingHeight)canvas.height=backingHeight;
     const fit=Math.min(backingWidth/image.naturalWidth,backingHeight/image.naturalHeight);
-    const drawWidth=image.naturalWidth*fit,drawHeight=image.naturalHeight*fit;
-    const x=(backingWidth-drawWidth)/2,y=(backingHeight-drawHeight)/2;
+    let drawWidth=image.naturalWidth*fit,drawHeight=image.naturalHeight*fit;
+    let x=(backingWidth-drawWidth)/2,y=(backingHeight-drawHeight)/2;
     context.clearRect(0,0,backingWidth,backingHeight);
+    // Match the real image's content box, including its responsive CSS frame.
+    // The frame is drawn separately, so only the artwork becomes pixelated.
+    const style=canvas.ownerDocument?.defaultView?.getComputedStyle?.(image);
+    if(style&&imageBounds?.width>0&&imageBounds?.height>0&&Number.isFinite(imageBounds.left)&&Number.isFinite(bounds?.left)&&typeof context.fillRect==='function'){
+      const left=parseFloat(style.borderLeftWidth)||0,right=parseFloat(style.borderRightWidth)||0;
+      const top=parseFloat(style.borderTopWidth)||0,bottom=parseFloat(style.borderBottomWidth)||0;
+      const fx=(imageBounds.left-bounds.left)*scale,fy=(imageBounds.top-bounds.top)*scale;
+      context.fillStyle=style.borderTopColor||'#e7ddca';context.fillRect(fx,fy,imageBounds.width*scale,imageBounds.height*scale);
+      x=fx+left*scale;y=fy+top*scale;
+      drawWidth=Math.max(1,(imageBounds.width-left-right)*scale);drawHeight=Math.max(1,(imageBounds.height-top-bottom)*scale);
+    }
     if(progress>=1){
       context.imageSmoothingEnabled=true;
       context.drawImage(image,x,y,drawWidth,drawHeight);

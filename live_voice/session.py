@@ -42,12 +42,14 @@ def recognition_timings(values):
 
 class LiveSession:
     def __init__(self, providers, character, send_json, send_bytes, voice=None, trigger=None, director=None, narrative=None, clock=time.monotonic,
-                 archive=None, archive_entries=(), archive_search=None, image_lookup=None):
+                 archive=None, archive_entries=(), archive_search=None, image_lookup=None, gallery_greeting=False):
         self.providers = providers
         self.engine = getattr(providers,'engine','baseline')
         self.streaming_speech = self.engine == 'qwen-omni'
         self.output_rate = getattr(providers,'output_rate',OUTPUT_RATE)
         self.character = character
+        self.gallery_greeting = gallery_greeting
+        self.visitor_name = None
         self.send_json = send_json
         self.send_bytes = send_bytes
         self.history = ReplyHistory()
@@ -332,6 +334,11 @@ class LiveSession:
                 self.reply_pending = False
                 await self.send_json({"type":"empty_transcript", "turn_id":turn_id}); return
             # Register finalized participant words before planning can be stopped.
+            from .visitor import introduced_name, visitor_note, introduction_only
+            visitor_introduction = introduced_name(text) if self.gallery_greeting and not action else None
+            if visitor_introduction:
+                self.visitor_name = visitor_introduction
+                await self.send_json({'type':'visitor_name','name':self.visitor_name,'turn_id':turn_id})
             # The director gets prior context plus latest separately, while the
             # actor later gets the current utterance exactly once from history.
             director_context = self.history.context_messages(latest=text, budget=3000 if self.story.active else 6000)
@@ -346,8 +353,9 @@ class LiveSession:
                 transcript['display_text'] = self.trigger.condition
             await self.send_json(transcript)
             archive_context = None
+            matches = []
             archive_started = time.perf_counter()
-            if self.archive:
+            if self.archive and not introduction_only(text,visitor_introduction):
                 scope = self.archive.scope
                 requested_image = image_request(text) if not action else None
                 offered = copy.deepcopy(self.pending_image_offer)
@@ -469,6 +477,8 @@ class LiveSession:
                 target = target.model_copy(update={"beat":target.beat + "\n\n" + self.story.runtime_note()})
             if plan:
                 target = target.model_copy(update={"beat":target.beat + "\n\n" + plan.actor_note()})
+            if self.gallery_greeting and self.visitor_name:
+                target = target.model_copy(update={'beat':target.beat+'\n\n'+visitor_note(self.visitor_name,bool(visitor_introduction))})
             if self.streaming_speech:
                 reply = await self.stream_native_reply(turn_id,target,pcm if not action else None,
                     delivery,archive_context,metrics,started)

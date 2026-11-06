@@ -2,7 +2,7 @@
 
 **Archive gallery:** open **Gallery view** at `/archive/gallery/` for a centred artwork, a thumbnail trail and a compact character conversation. Retrieved artworks reveal from mosaic blocks to a clear image; museum details and source links remain beside the chat. The existing `/archive/` view stays available and shares the same saved archive characters. [Gallery controls and behaviour](docs/ARCHIVE_GALLERY.md).
 
-[Gallery with Avara typography](docs/screenshots/archive-gallery-avara.jpg) · [Pixel reveal in progress](docs/screenshots/archive-gallery-reveal.jpg).
+[Gallery with artwork details beside the image](docs/screenshots/archive-gallery-side-details.jpg) · [Framed pixel reveal in progress](docs/screenshots/archive-gallery-reveal.jpg). Visitors can enter their name or say “My name is…” for a personalised greeting.
 
 **New: compare native streaming speech with the current setup.** Choose **Current · Qwen + Drama 3** or **Streaming · Qwen3-Omni** using the same saved character, director and archives. **Compare replies** shows transcripts, source references and separate timing estimates, with a JSON download. The isolated three-H200 experiment runs sequentially with the original stack on the same portal port; its runtime and environment are separate. [Setup and fair comparison](docs/QWEN_STREAM_COMPARISON.md) · [Surrey runtime commands](experiments/qwen_stream/README.md). Hardware delay and character quality still need measurement on Surrey.
 

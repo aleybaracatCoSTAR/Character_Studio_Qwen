@@ -590,9 +590,11 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 import webrtcvad
                 vad = webrtcvad.Vad(2)
                 detector = TurnDetector(lambda pcm:vad.is_speech(pcm,16000))
+            gallery_greeting = config.get('gallery_greeting',False)
+            if type(gallery_greeting) is not bool: raise ValueError('Invalid gallery greeting setting.')
             session = LiveSession(selected_services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director,
                                   narrative=narrative, archive=archive if archive.enabled else None, archive_entries=archive_entries,
-                                  archive_search=archive_search, image_lookup=museum_image_lookup)
+                                  archive_search=archive_search, image_lookup=museum_image_lookup,gallery_greeting=gallery_greeting)
             listen_after = 0.0
             accepted_barge_in_turn = None
             barge_in_reserved = False

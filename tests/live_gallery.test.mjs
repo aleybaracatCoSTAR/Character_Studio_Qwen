@@ -39,10 +39,10 @@ function documentFixture(){
   return {document,nodes:{header,status,main,aside,form,name,conversation,heading,tools,record,typed,compare,messages}};
 }
 
-function setup({fetcher=async()=>{throw new Error('No implicit network request is allowed.');},collections=()=>['national-gallery-of-art']}={}){
+function setup({fetcher=async()=>{throw new Error('No implicit network request is allowed.');},collections=()=>['national-gallery-of-art'],onIntroduce=()=>false}={}){
   const {document,nodes}=documentFixture(),statuses=[];
   const reveal={shows:[],replays:0,clears:0,destroys:0,show(url,options){this.shows.push({url,options});const image=document.getElementById('gallery-image');if(image.src!==url){image.src=url;image.complete=false;image.naturalWidth=0;}return true;},replay(){this.replays++;},clear(){this.clears++;},destroy(){this.destroys++;}};
-  const gallery=new ArchiveGallery({document,fetcher,collections,onImageStatus:event=>statuses.push(event),revealFactory:()=>reveal});
+  const gallery=new ArchiveGallery({document,fetcher,collections,onIntroduce,onImageStatus:event=>statuses.push(event),revealFactory:()=>reveal});
   const image=document.getElementById('gallery-image');
   return {gallery,document,nodes,reveal,statuses,image,
     loaded(){image.complete=true;image.naturalWidth=800;image.naturalHeight=600;image.emit('load');},
@@ -55,6 +55,19 @@ const entry=(id='a'.repeat(32),extra={})=>({id,collection_id:'national-gallery-o
 const source=(turn=1,extra={})=>({type:'archive_sources',turn_id:turn,image_request:true,...extra});
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 const page=entries=>({entries,total:entries.length,matched:entries.length,offset:0,limit:18});
+
+test('name entry queues one introduction until a live connection is ready',()=>{
+  let ready=false;const names=[];
+  const {gallery,document}=setup({onIntroduce:name=>{if(!ready)return false;names.push(name);return true;}});
+  assert.equal(gallery.introduce(' Aley '),false);assert.equal(gallery.pendingName,'Aley');
+  ready=true;assert.equal(gallery.flushIntroduction(),true);assert.deepEqual(names,['Aley']);
+  assert.equal(gallery.flushIntroduction(),false);
+  gallery.setVisitorName('Aley');
+  assert.equal(document.getElementById('gallery-name-status').textContent,'Hello, Aley.');
+  assert.equal(document.getElementById('gallery-visitor-name').value,'Aley');
+  assert.equal(document.getElementById('character-name').value,'Existing Robin');
+  assert.equal(gallery.introduce('<script>'),false);assert.deepEqual(names,['Aley']);
+});
 
 test('galleryRecords validates source URLs, IDs and collections while retaining safe metadata-only records',()=>{
   const records=galleryRecords([entry(),entry(),entry('bad id'),entry('b'.repeat(32),{collection_id:'../private'}),
@@ -72,6 +85,9 @@ test('mount retains the existing profile, text, microphone and comparison nodes 
   assert.equal(document.getElementById('character-form'),nodes.form);assert.equal(nodes.name.value,'Existing Robin');
   assert.equal(nodes.aside.parentNode.id,'gallery-settings');assert.equal(nodes.typed.parentNode,nodes.conversation);
   assert.equal(nodes.tools.parentNode.className,'gallery-session-options');assert.equal(document.getElementById('open-comparison'),nodes.compare);
+  assert.equal(document.getElementById('gallery-title').parentNode.parentNode.className,'gallery-artwork-layout');
+  assert.equal(nodes.conversation.parentNode.className,'gallery-conversation');
+  assert.equal(nodes.conversation.parentNode.querySelector('.gallery-details'),null);
   nodes.record.emit('click');assert.equal(recordClicks,1);
   const back=document.body.querySelector('.gallery-back');assert.equal(back.href,'/archive/');
   document.getElementById('gallery-open-settings').emit('click');assert.equal(document.getElementById('gallery-settings').open,true);

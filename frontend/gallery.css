@@ -314,6 +314,13 @@ body.gallery-page .gallery-conversation {
   background: var(--gallery-panel);
 }
 
+body.gallery-page .gallery-welcome { flex: 0 0 auto; padding: 15px 24px 10px; border-bottom: 1px solid var(--gallery-line); }
+body.gallery-page .gallery-welcome label { display: block; margin: 0 0 6px; color: var(--gallery-muted); font-size: 10px; }
+body.gallery-page .gallery-name-row { display: flex; gap: 10px; align-items: center; }
+body.gallery-page .gallery-name-row input { min-width: 0; flex: 1; padding: 7px 9px; border: 1px solid #594a3c; border-radius: 5px; color: var(--gallery-paper); background: #211c18; font-size: 11px; }
+body.gallery-page .gallery-name-row button { white-space: nowrap; font-size: 10px; }
+body.gallery-page #gallery-name-status { margin: 7px 0 0; font-size: 9px; line-height: 1.5; color: var(--gallery-muted); }
+
 body.gallery-page .gallery-details {
   flex: 0 1 auto;
   min-height: 0;
@@ -565,4 +572,29 @@ body.gallery-page [hidden] { display: none !important; }
 
 @media (prefers-reduced-motion: reduce) {
   body.gallery-page *, body.gallery-page *::before, body.gallery-page *::after { scroll-behavior: auto !important; transition-duration: 0s !important; }
+}
+
+/* Artwork context belongs with the work; the chat keeps the full right column. */
+body.gallery-page .gallery-artwork-layout { display: grid; grid-template-columns: minmax(155px, .42fr) minmax(0, 1fr); gap: 24px; flex: 1 1 0; min-height: 0; min-width: 0; align-items: center; }
+body.gallery-page .gallery-artwork-layout > .gallery-details { max-height: 100%; min-width: 0; padding: 18px 0; border: 0; overflow: auto; }
+body.gallery-page .gallery-artwork-layout #gallery-title { font-size: clamp(20px, 1.8vw, 29px); line-height: 1.2; }
+body.gallery-page .gallery-artwork-layout #gallery-title[data-long-title="true"] { display: block; overflow: visible; -webkit-line-clamp: unset; font-size: 22px; }
+body.gallery-page .gallery-artwork-display { display: flex; flex-direction: column; gap: 18px; min-width: 0; min-height: 0; height: 100%; }
+body.gallery-page .gallery-artwork-layout #gallery-description { max-height: 160px; }
+body.gallery-page .gallery-artwork-layout #gallery-empty { padding: 20px 8px; }
+body.gallery-page .gallery-artwork-layout #gallery-empty h1 { font-size: 27px; }
+@media (max-width: 1100px) and (min-width: 821px) {
+  body.gallery-page .gallery-artwork-layout { grid-template-columns: minmax(115px,.42fr) minmax(0,1fr); gap: 16px; }
+  body.gallery-page .gallery-artwork-layout #gallery-title,body.gallery-page .gallery-artwork-layout #gallery-title[data-long-title="true"] { font-size: 19px; }
+}
+@media (max-width: 820px) {
+  body.gallery-page .gallery-artwork-layout { grid-template-columns: minmax(130px,.4fr) minmax(0,1fr); gap: 18px; }
+  body.gallery-page .gallery-artwork-layout > .gallery-details { padding: 0; }
+}
+@media (max-width: 520px) {
+  body.gallery-page .gallery-artwork-layout { display: flex; flex-direction: column; gap: 16px; align-items: stretch; flex: auto; }
+  body.gallery-page .gallery-artwork-display { order: -1; height: 350px; flex: none; }
+  body.gallery-page .gallery-artwork-layout > .gallery-details { max-height: none; overflow: visible; padding: 4px 0 10px; }
+  body.gallery-page .gallery-stage { height: auto; }
+  body.gallery-page .gallery-artwork-layout #gallery-title,body.gallery-page .gallery-artwork-layout #gallery-title[data-long-title="true"] { font-size: 23px; }
 }

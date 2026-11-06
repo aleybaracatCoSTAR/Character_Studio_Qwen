@@ -1,6 +1,6 @@
 # Archive gallery
 
-![Gallery with Avara headings and a retrieved National Gallery of Art painting](screenshots/archive-gallery-avara.jpg)
+![Full-height conversation with artwork information beside the image](screenshots/archive-gallery-side-details.jpg)
 
 [View the pixel reveal in progress](screenshots/archive-gallery-reveal.jpg). These are interface previews using real saved catalogue records, with no active model call.
 
@@ -12,7 +12,13 @@ http://127.0.0.1:18091/archive/gallery/
 
 The existing **`/archive/`** view and **`/`** character studio remain available. Click **Gallery view** in the studio header to enter, and **← Archive** in the gallery to return. The gallery uses the same application and voice connection; it does not start a different model or need another GPU.
 
+The right-hand panel is reserved for the name entry and full-height conversation. Artwork titles, artist/date/medium, museum links and expandable catalogue notes sit beside the artwork in the main display area. Narrow phone layouts stack the image and its information above the conversation.
+
 ## Try it
+
+Enter **Your name → Say hello**, or start a microphone call and say **“My name is Aley.”** The gallery recognises an explicit introduction and asks either voice engine to begin its reply with “Hello” and your name. The name stays in the current page/call, rather than being added to Robin's character profile. A pure introduction does not search the museum catalogue. If services are starting, the entered introduction waits for the call to connect.
+
+The mosaic reveal lasts 1.25 seconds. Its drawing area matches the real image's responsive border and content box, so the cream frame is present throughout rather than appearing only at the end. Reduced-motion preferences still show the clear image immediately.
 
 1. Open **Character & collections** to choose your character and enable the art collections you want it to consult. Collections must already be imported into the local archive; opening the gallery does not download museum databases.
 2. Start a call, or use the text input, and ask about an artist, work or subject.

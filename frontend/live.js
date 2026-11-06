@@ -36,7 +36,12 @@ const artworkChat=new ArtworkChat({document,container:$('messages'),empty:$('emp
 const gallery=galleryPage?new ArchiveGallery({document,
   collections:()=>archivePanel.collectionIds.length?archivePanel.collectionIds.filter(id=>id!=='qtm')
     :archivePanel.collections.filter(item=>item.id!=='qtm'&&item.count>0).map(item=>item.id),
-  onImageStatus:value=>{if(imageStatusSupported&&socket?.readyState===WebSocket.OPEN)send(value);}}):null;
+  onImageStatus:value=>{if(imageStatusSupported&&socket?.readyState===WebSocket.OPEN)send(value);},
+  onIntroduce:name=>{
+    if(sessionReady&&socket?.readyState===WebSocket.OPEN&&!replyPending){holdMicrophone();send({type:'text',text:`My name is ${name}.`});return true;}
+    if(!socket&&!connecting&&ready)void connect(false);
+    return false;
+  }}):null;
 const comparison=new EngineComparison({document,onChange:()=>{feedback();updateEngineVoice();void status();}});
 const listeningFeedback=new ListeningFeedback({label:$('listening-mode'),partial:$('listening-partial'),
   onFinalizing:()=>{holdMicrophone();state('Finishing recognition… · Mic paused');},
@@ -191,6 +196,7 @@ function resumeMicrophone(){
   resumeTimer=setTimeout(()=>{
     replyPending=false;
     state(muted?'Microphone muted':stream?'Listening…':'Ready for your next message');controls();
+    gallery?.flushIntroduction();
   },350);
 }
 function controls(){
@@ -260,6 +266,7 @@ async function disconnect(){
   return disconnecting;
 }
 function event(data){
+  if(data.type==='visitor_name'){if(data.turn_id===currentTurn)gallery?.setVisitorName(data.name);return;}
   if(data.type==='barge_in_ready'){bargeIn.acknowledge(data);return;}
   if(data.type==='interruptions_ack'){
     interruptionsPermitted=data.enabled===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});
@@ -288,7 +295,7 @@ function event(data){
   }
   if(data.type==='ready'){
     if(!comparison.ready(data)||!playback?.setRate(data.output_rate??44100)){feedback('The server selected an incompatible engine or audio format. End the call, refresh and try again.');void disconnect();return;}
-    streamingSpeech=data.streaming_speech===true;listeningFeedback.setMode(data.listening_mode);sessionReady=true;imageStatusSupported=data.image_status===true;interruptionsPermitted=data.interruptions===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
+    streamingSpeech=data.streaming_speech===true;listeningFeedback.setMode(data.listening_mode);sessionReady=true;imageStatusSupported=data.image_status===true;interruptionsPermitted=data.interruptions===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();gallery?.greetAtStart();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
   if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;streamingAudioQueued=false;bargeIn.begin(data.turn_id);listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);artworkChat.setTurn(currentTurn);gallery?.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
@@ -349,7 +356,7 @@ async function connect(useMic=true){
     opened.onclose=async()=>{if(socket===opened){feedback('Live connection closed. Check that all three services are ready.');await disconnect();}};
     await new Promise((resolve,reject)=>{opened.onopen=resolve;opened.addEventListener('error',reject,{once:true});opened.addEventListener('close',()=>reject(new Error('Connection closed')),{once:true});});
     comparison.beginCall({id:characterLibrary?.activeId||'current-character',profile:capturedProfile(),input:useMic?'speech':'text'});
-    send({type:'start',...comparison.startFields(),character:character(),voice,trigger:triggerSettings(),director:directorSettings(),narrative:narrativeSettings(),archive:archivePanel.settings(),interruptions:useMic&&$('allow-interruptions').checked});
+    send({type:'start',...comparison.startFields(),character:character(),voice,trigger:triggerSettings(),director:directorSettings(),narrative:narrativeSettings(),archive:archivePanel.settings(),gallery_greeting:galleryPage,interruptions:useMic&&$('allow-interruptions').checked});
     if(useMic){
       const source=context.createMediaStreamSource(stream),gain=context.createGain();gain.gain.value=0;
       capture=new AudioWorkletNode(context,'live-capture');const resampler=new StreamResampler(context.sampleRate);

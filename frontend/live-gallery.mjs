@@ -21,13 +21,35 @@ export function galleryRecords(entries){
 // This view consumes the same vetted retrieval events as the original archive.
 // Browsing is independent: choosing a thumbnail never sends a hidden model turn.
 export class ArchiveGallery{
-  constructor({document,fetcher=(...args)=>fetch(...args),collections=()=>[],onImageStatus=()=>{},revealFactory=options=>new PixelateReveal(options)}){
+  constructor({document,fetcher=(...args)=>fetch(...args),collections=()=>[],onImageStatus=()=>{},onIntroduce=()=>false,revealFactory=options=>new PixelateReveal(options)}){
     this.document=document;this.fetcher=fetcher;this.collections=collections;this.onImageStatus=onImageStatus;
+    this.onIntroduce=onIntroduce;this.visitorName='';this.pendingName='';
     this.records=[];this.selected=null;this.turnId=0;this.request=null;this.searchEpoch=0;this.imageEpoch=0;this.controller=null;this.disposed=false;
     this.mount();
     this.reveal=revealFactory({image:this.get('gallery-image'),canvas:this.get('gallery-canvas')});
     this.get('gallery-replay').addEventListener('click',()=>this.reveal.replay());
     this.get('gallery-search-form').addEventListener('submit',event=>{event.preventDefault();void this.search(this.get('gallery-search').value);});
+    this.get('gallery-name-form').addEventListener('submit',event=>{event.preventDefault();this.introduce(this.get('gallery-visitor-name').value);});
+  }
+  introduce(value){
+    const name=typeof value==='string'?value.trim().replace(/\s+/g,' '):'';
+    if(!name||name.length>60||!Array.from(name).every(char=>/\p{L}/u.test(char)||" -'’".includes(char))){this.get('gallery-name-status').textContent='Enter your name using letters, spaces, apostrophes or hyphens.';return false;}
+    this.visitorName=name;this.pendingName=name;
+    this.get('gallery-name-status').textContent='Start a call to hear your welcome, or wait for the current reply to finish.';
+    return this.flushIntroduction();
+  }
+  greetAtStart(){const name=this.get('gallery-visitor-name').value||this.visitorName;if(name)this.introduce(name);}
+  flushIntroduction(){
+    if(!this.pendingName)return false;
+    if(this.onIntroduce(this.pendingName)!==true)return false;
+    this.pendingName='';this.get('gallery-name-status').textContent='Introducing you…';return true;
+  }
+  setVisitorName(value){
+    if(typeof value!=='string'||!value||value.length>60)return false;
+    this.visitorName=value;this.get('gallery-visitor-name').value=value;
+    this.get('gallery-name-status').textContent=`Hello, ${value}.`;
+    this.get('empty-state').querySelector('h3').textContent=`Hello, ${value}.`;
+    return true;
   }
   get(id){return this.document.getElementById(id);}
   node(tag,className,content){const node=this.document.createElement(tag);if(className)node.className=className;if(content)node.textContent=content;return node;}
@@ -64,7 +86,13 @@ export class ArchiveGallery{
     catalogue.append(catalogueLabel,details.querySelector('#gallery-description'),rights);details.append(catalogue);
     const tools=conversation.querySelector('.conversation-tools');if(tools){const options=this.node('details','gallery-session-options'),summary=this.node('summary','','Session options');options.append(summary,tools);conversation.querySelector('.conversation-heading').after(options);}
     const hint=this.get('empty-state');hint.replaceChildren(this.node('h3','','What catches your eye?'),this.node('p','','Talk about an artwork, a feeling or a question. Images found in the collection appear beside our conversation.'));
-    column.append(details,conversation);main.className='gallery-shell';main.replaceChildren(rail,stage,column);
+    const welcome=this.node('form','gallery-welcome');welcome.id='gallery-name-form';welcome.setAttribute('aria-label','Introduce yourself');
+    const nameLabel=this.node('label','','Your name'),nameInput=this.node('input');nameInput.id='gallery-visitor-name';nameInput.maxLength=60;nameInput.autocomplete='given-name';nameInput.placeholder='What shall I call you?';nameInput.setAttribute('aria-label','Your name');
+    const nameRow=this.node('div','gallery-name-row'),hello=this.node('button','quiet','Say hello');hello.type='submit';nameRow.append(nameInput,hello);
+    const nameStatus=this.node('p','hint small','Or start a call and say “My name is…”');nameStatus.id='gallery-name-status';nameStatus.setAttribute('role','status');welcome.append(nameLabel,nameRow,nameStatus);
+    const artworkLayout=this.node('div','gallery-artwork-layout'),artworkDisplay=this.node('div','gallery-artwork-display');
+    artworkDisplay.append(empty,picture,caption);artworkLayout.append(details,artworkDisplay);stage.append(artworkLayout);
+    column.append(welcome,conversation);main.className='gallery-shell';main.replaceChildren(rail,stage,column);
   }
   setTurn(id){if(Number.isSafeInteger(id)&&id>0&&id>=this.turnId){this.turnId=id;this.request=null;}}
   disconnect(){this.turnId=0;this.request=null;}
