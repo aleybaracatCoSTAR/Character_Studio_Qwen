@@ -29,3 +29,13 @@ slurm-character-*.log
 !assets/voices/*.wav
 .venv-qwen-stream/
 slurm-qwen-stream-*.log
+
+# Unity projects generated locally; the reusable package under unity/ is tracked.
+unity/**/Library/
+unity/**/Temp/
+unity/**/Obj/
+unity/**/obj/
+unity/**/Logs/
+unity/**/UserSettings/
+unity/**/Build/
+unity/**/Builds/

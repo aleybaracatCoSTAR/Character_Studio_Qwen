@@ -1,0 +1,9 @@
+{
+  "name": "CoSTAR.RobinDemo",
+  "references": [
+    "Unity.TextMeshPro",
+    "UnityEngine.UI",
+    "Unity.InputSystem",
+    "Unity.Newtonsoft.Json"
+  ]
+}

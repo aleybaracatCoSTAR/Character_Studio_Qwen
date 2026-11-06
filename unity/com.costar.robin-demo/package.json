@@ -1,0 +1,15 @@
+{
+  "name": "com.costar.robin-demo",
+  "version": "0.1.0",
+  "displayName": "CoSTAR Robin Archive Demo",
+  "description": "Desktop Unity client for Character Studio voice and archive comparison.",
+  "unity": "6000.0",
+  "author": {
+    "name": "CoSTAR Prototyping"
+  },
+  "dependencies": {
+    "com.unity.ugui": "2.0.0",
+    "com.unity.inputsystem": "1.20.0",
+    "com.unity.nuget.newtonsoft-json": "3.2.2"
+  }
+}

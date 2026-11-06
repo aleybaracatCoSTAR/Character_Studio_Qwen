@@ -1,0 +1,12 @@
+{
+  "name": "CoSTAR.RobinDemo.Tests",
+  "references": [
+    "CoSTAR.RobinDemo"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}
