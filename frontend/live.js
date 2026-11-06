@@ -13,6 +13,7 @@ import {VoiceProgress} from './live-voice-progress.mjs';
 import {BargeInController} from './live-barge-in.mjs';
 import {EngineComparison} from './live-comparison.mjs';
 import {ArchiveGallery} from './live-gallery.mjs';
+import {SavedVoices} from './live-voices.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const archivePage=location.pathname.startsWith('/archive');
 const galleryPage=location.pathname.startsWith('/archive/gallery');
@@ -42,6 +43,8 @@ const gallery=galleryPage?new ArchiveGallery({document,
     if(!socket&&!connecting&&ready)void connect(false);
     return false;
   }}):null;
+const savedVoices=new SavedVoices({document,onChange:saveActiveProfile,
+  canEdit:()=>!socket&&!connecting&&comparison.engine()!=='qwen-omni',onPreview:setReferencePreview});
 const comparison=new EngineComparison({document,onChange:()=>{feedback();updateEngineVoice();void status();}});
 const listeningFeedback=new ListeningFeedback({label:$('listening-mode'),partial:$('listening-partial'),
   onFinalizing:()=>{holdMicrophone();state('Finishing recognition… · Mic paused');},
@@ -107,7 +110,8 @@ function storyControls(){
   $('cue-beat').disabled=!live||storyView.finished||replyPending;
 }
 function character(){return Object.fromEntries(fields.map(key=>[key,form.elements[key].value]));}
-function capturedProfile(){return {character:character(),voice:{preset:$('voice-preset').value,...delivery()},
+function capturedProfile(){return {character:character(),voice:{preset:$('voice-preset').value,...delivery(),
+  ...(savedVoices.id()?{saved_voice_id:savedVoices.id()}: {})},
   director:directorSettings(),trigger:triggerSettings(),narrative:narrativeSettings(),archive:archivePanel.settings()};}
 function libraryNotice(){
   $('character-library-note').textContent=libraryHint+(characterLibrary?.storageError?' Changes are kept for this page, but this browser could not save them.':'');
@@ -130,9 +134,14 @@ function saveActiveProfile(){
   if(!characterLibrary||loadingProfile)return;
   characterLibrary.save(capturedProfile());characterLibrary.writeLegacy();characterOptions();
 }
+function setReferencePreview(audio){
+  $('reference-audio').pause();$('reference-audio').removeAttribute('src');
+  if(referenceURL)URL.revokeObjectURL(referenceURL);referenceURL=audio?URL.createObjectURL(audio):null;
+  if(referenceURL)$('reference-audio').src=referenceURL;
+  $('reference-preview').hidden=!referenceURL;
+}
 function clearReference(){
-  $('voice-reference').value='';$('reference-text').value='';$('reference-audio').pause();$('reference-audio').removeAttribute('src');
-  if(referenceURL)URL.revokeObjectURL(referenceURL);referenceURL=null;$('reference-preview').hidden=true;
+  savedVoices.clear();$('voice-reference').value='';$('reference-text').value='';$('save-voice-name').value='';setReferencePreview(null);
 }
 function applyProfile(profile){
   loadingProfile=true;
@@ -146,7 +155,9 @@ function applyProfile(profile){
     storyEditor.load(profile.narrative.beats);$('story-enabled').checked=profile.narrative.enabled;$('story-mode').value=profile.narrative.mode;
     $('story-settings').hidden=!profile.narrative.enabled;
     archivePanel.apply(profile.archive??{enabled:profile.id==='map-keeper',scope:profile.id==='map-keeper'?'library':'selected',entry_ids:[]});
-    clearReference();updateVoicePreset();
+    clearReference();
+    if(profile.voice.saved_voice_id)void savedVoices.load(profile.voice.saved_voice_id);
+    updateVoicePreset();
     $('chat-title').textContent=`Talk to ${profile.character.name.trim()||'your character'}`;
     clearTimeout(resumeTimer);replyPending=false;currentTurn=0;triggerActive=false;
     playback?.clear();bargeIn.reset();conversation.reset();artworkChat.reset();gallery?.reset();inspector.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();
@@ -178,9 +189,10 @@ function state(message){$('call-state').textContent=canSpeakOver()?message.repla
 function send(value){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(value));}
 function delivery(){return {emotion:$('voice-emotion').value,event:$('voice-event').value,direction:$('voice-direction').value};}
 async function voiceSettings(){
-  const settings={...delivery(),preset:$('voice-preset').value},file=$('voice-reference').files[0];
+  const settings={...delivery(),preset:$('voice-preset').value};
   if(settings.preset!=='custom')return settings;
-  if(!file)throw new Error('Upload a WAV reference, or choose Female, Male or Automatic.');
+  const file=savedVoices.source();
+  if(!file)throw new Error('Choose one of My saved voices or upload a WAV and transcript in Voice settings. You can also choose Female, Male or Automatic.');
   if(file.size>2*1024*1024)throw new Error('Choose a voice reference smaller than 2 MB.');
   const transcript=$('reference-text').value.trim();
   if(!transcript)throw new Error('Enter the exact words spoken in the voice reference.');
@@ -214,6 +226,7 @@ function controls(){
   $('send-text').disabled=!connected||!sessionReady;
   for(const element of form.elements)element.disabled=element.dataset.liveSetting?connecting:!!connected||connecting;
   updateEngineVoice();
+  savedVoices.setBusy(!!connected||connecting||comparison.engine()==='qwen-omni');
   archivePanel.setBusy(!!connected||connecting);
   $('test-trigger').disabled=!connected||!sessionReady||!$('trigger-enabled').checked;
   $('clear-trigger').disabled=!connected||!sessionReady||!triggerActive;
@@ -340,7 +353,7 @@ async function connect(useMic=true){
     conversation.reset();artworkChat.reset();gallery?.disconnect();bargeIn.reset();interruptionsPermitted=false;inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
-    try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}
+    try{voice=await voiceSettings();}catch(error){feedback(error.message);$('voice-settings').open=true;gallery?.openVoiceSettings();savedVoices.note(error.message);await disconnect();return;}
     playback=new PCMPlayback(context,send,()=>{streamingAudioQueued=true;comparison.audioQueued(currentTurn);state('Speaking… · Mic paused');},()=>{comparison.playbackComplete(currentTurn);resumeMicrophone();});
     if(useMic){
       stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}});
@@ -432,16 +445,15 @@ function updateVoicePreset(){
   updateEngineVoice();
 }
 $('voice-preset').addEventListener('change',()=>{
+  if($('voice-preset').value!=='custom'){savedVoices.clear();setReferencePreview(null);}
   updateVoicePreset();
 });
 $('voice-reference').addEventListener('change',()=>{
-  if(referenceURL)URL.revokeObjectURL(referenceURL);referenceURL=null;
-  const file=$('voice-reference').files[0];
-  if(file?.size>2*1024*1024){$('voice-reference').value='';feedback('Choose a voice reference smaller than 2 MB.');}
-  else if(file){referenceURL=URL.createObjectURL(file);$('reference-audio').src=referenceURL;feedback();}
-  $('reference-preview').hidden=!referenceURL;
+  savedVoices.useUpload();const file=$('voice-reference').files[0];
+  if(file?.size>2*1024*1024){$('voice-reference').value='';setReferencePreview(null);feedback('Choose a voice reference smaller than 2 MB.');}
+  else{setReferencePreview(file||null);feedback();}
 });
-$('clear-reference').addEventListener('click',clearReference);
+$('clear-reference').addEventListener('click',()=>{clearReference();saveActiveProfile();});
 for(const id of ['trigger-enabled','trigger-action','trigger-condition','trigger-emotion','trigger-behaviour','trigger-cue','trigger-delivery'])$(id).addEventListener('input',()=>{
   $('trigger-fields').hidden=!$('trigger-enabled').checked;$('test-trigger').textContent=$('trigger-action').value||'Test reaction';controls();
 });
@@ -480,8 +492,8 @@ async function status(){
 }
 async function init(){
   if(archivePage){
-    document.title=gallery?'Character Studio · Archive gallery':'Character Studio · Character + archive';
-    const brand=document.querySelector('.brand span');if(brand)brand.textContent='Character + archive';
+    document.title=gallery?'Art Archive Studio · Gallery':'Art Archive Studio';
+    const brand=document.querySelector('.brand');if(brand){brand.textContent='Art Archive Studio';}
     document.querySelector('.eyebrow').textContent='ARCHIVE CONVERSATION';
   }
   let saved;try{saved=JSON.parse(localStorage.getItem('live-character-v1')||localStorage.getItem('qwen-character-v1'));}catch(error){}
@@ -518,6 +530,7 @@ async function init(){
   $('story-settings').hidden=!$('story-enabled').checked;previewStory();
   await archivePanel.loadCollections();
   await archivePanel.load();
+  await savedVoices.init();
   await loadCharacterLibrary();
   if(gallery)void gallery.search();
   await status();setInterval(status,5000);

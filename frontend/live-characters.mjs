@@ -1,3 +1,4 @@
+import {savedVoiceId} from './live-voices.mjs';
 export const CHARACTER_LIBRARY_KEY='live-character-library-v1';
 const CHARACTER_FIELDS=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 const TRIGGER_FIELDS=['action','condition','emotion','behaviour','spoken_cue','delivery'];
@@ -8,7 +9,8 @@ const copy=value=>JSON.parse(JSON.stringify(value));
 const strings=(source,fields)=>Object.fromEntries(fields.map(key=>[key,typeof source?.[key]==='string'?source[key]:'']));
 
 // Persist authored settings only. Microphone audio, uploaded references, encoded
-// files and reference transcripts are never part of a library record.
+// files and reference transcripts are never part of a library record. An opaque
+// saved voice ID may reference a separate browser-local IndexedDB recording.
 export function characterProfile(value,id=value?.id){
   if(!value||typeof value!=='object'||typeof id!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id)
       ||!value.character||typeof value.character.name!=='string')return null;
@@ -23,6 +25,7 @@ export function characterProfile(value,id=value?.id){
       beats:Array.isArray(narrative.beats)?narrative.beats.slice(0,12).map(beat=>Object.fromEntries(BEAT_FIELDS.map(key=>
         [key,['min_seconds','max_seconds'].includes(key)?(Number.isFinite(beat?.[key])?beat[key]:key==='min_seconds'?15:90)
           :typeof beat?.[key]==='string'?beat[key]:'']))):[]}};
+  if(savedVoiceId(voice.saved_voice_id))profile.voice.saved_voice_id=voice.saved_voice_id;
   if(value.archive&&typeof value.archive==='object')profile.archive={enabled:value.archive.enabled===true,
     ...(value.archive.scope==='library'?{scope:'library'}:{}),
     entry_ids:[...new Set(Array.isArray(value.archive.entry_ids)?value.archive.entry_ids.filter(id=>typeof id==='string'&&/^[a-f0-9]{32}$/.test(id)):[])].slice(0,50)};

@@ -53,16 +53,25 @@ export class ArchiveGallery{
   }
   get(id){return this.document.getElementById(id);}
   node(tag,className,content){const node=this.document.createElement(tag);if(className)node.className=className;if(content)node.textContent=content;return node;}
+  openSettings(view='character'){
+    const voice=view==='voice',settings=this.get('gallery-settings');
+    settings.setAttribute('data-settings-view',voice?'voice':'character');
+    this.get('gallery-settings-title').textContent=voice?'Voice & delivery':'Character & collections';
+    if(voice&&this.get('voice-settings'))this.get('voice-settings').open=true;
+    if(!settings.open)settings.showModal();
+    if(voice){const preset=this.get('voice-preset');(preset&&!preset.disabled?preset:this.get('voice-emotion'))?.focus?.();}
+  }
+  openVoiceSettings(){this.openSettings('voice');}
   mount(){
-    const doc=this.document;doc.body.classList.add('gallery-page');doc.title='Character Studio · Archive gallery';
+    const doc=this.document;doc.body.classList.add('gallery-page');doc.title='Art Archive Studio · Gallery';
     const style=this.node('link');style.rel='stylesheet';style.href='/static/gallery.css';doc.head.append(style);
     const main=doc.querySelector('main'),aside=main.querySelector('aside'),conversation=main.querySelector('.conversation'),header=doc.querySelector('body > header');
     const settings=this.node('dialog');settings.id='gallery-settings';settings.setAttribute('aria-labelledby','gallery-settings-title');
     const settingsHeading=this.node('div','inspection-heading'),settingsTitle=this.node('h2','','Character & collections');settingsTitle.id='gallery-settings-title';
     const close=this.node('button','secondary','Done');close.type='button';close.addEventListener('click',()=>settings.close());settingsHeading.append(settingsTitle,close);settings.append(settingsHeading,aside);doc.body.append(settings);
     const left=this.node('div','gallery-header-left'),back=this.node('a','gallery-back','← Archive');back.href='/archive/';
-    const open=this.node('button','quiet','Character & collections');open.id='gallery-open-settings';open.type='button';open.setAttribute('aria-haspopup','dialog');open.addEventListener('click',()=>settings.showModal());left.append(back,open);
-    const brand=this.node('a','gallery-header-title','Character Studio');brand.href='/';
+    const open=this.node('button','quiet','Character & collections');open.id='gallery-open-settings';open.type='button';open.setAttribute('aria-haspopup','dialog');open.addEventListener('click',()=>this.openSettings());left.append(back,open);
+    const brand=this.node('a','gallery-header-title','Art Archive Studio');brand.href='/archive/';
     const right=this.node('div','gallery-header-right');right.append(this.get('status'));header.replaceChildren(left,brand,right);
     const rail=this.node('nav','gallery-rail');rail.setAttribute('aria-label','Artworks in this visit');rail.append(this.node('span','gallery-rail-label','YOUR VISIT'));
     const thumbs=this.node('div');thumbs.id='gallery-thumbnails';rail.append(thumbs);
@@ -85,6 +94,7 @@ export class ArchiveGallery{
     const catalogue=this.node('details','gallery-catalogue'),catalogueLabel=this.node('summary','','Catalogue notes & rights');
     catalogue.append(catalogueLabel,details.querySelector('#gallery-description'),rights);details.append(catalogue);
     const tools=conversation.querySelector('.conversation-tools');if(tools){const options=this.node('details','gallery-session-options'),summary=this.node('summary','','Session options');options.append(summary,tools);conversation.querySelector('.conversation-heading').after(options);}
+    const voiceButton=this.node('button','quiet gallery-voice-button','Voice & delivery');voiceButton.id='gallery-open-voice';voiceButton.type='button';voiceButton.setAttribute('aria-haspopup','dialog');voiceButton.setAttribute('aria-controls','gallery-settings');voiceButton.addEventListener('click',()=>this.openVoiceSettings());conversation.querySelector('.conversation-heading').append(voiceButton);
     const hint=this.get('empty-state');hint.replaceChildren(this.node('h3','','What catches your eye?'),this.node('p','','Talk about an artwork, a feeling or a question. Images found in the collection appear beside our conversation.'));
     const welcome=this.node('form','gallery-welcome');welcome.id='gallery-name-form';welcome.setAttribute('aria-label','Introduce yourself');
     const nameLabel=this.node('label','','Your name'),nameInput=this.node('input');nameInput.id='gallery-visitor-name';nameInput.maxLength=60;nameInput.autocomplete='given-name';nameInput.placeholder='What shall I call you?';nameInput.setAttribute('aria-label','Your name');

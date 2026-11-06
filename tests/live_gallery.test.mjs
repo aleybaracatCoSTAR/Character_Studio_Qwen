@@ -32,7 +32,9 @@ function documentFixture(){
   document.body=document.createElement('body');document.head=document.createElement('head');
   const make=(tag,id,className='')=>{const node=document.createElement(tag);if(id)node.id=id;node.className=className;return node;};
   const header=make('header'),status=make('span','status'),main=make('main'),aside=make('aside');header.append(status);
-  const form=make('form','character-form'),name=make('input','character-name');name.value='Existing Robin';form.append(name);aside.append(form);
+  const form=make('form','character-form'),name=make('input','character-name');name.value='Existing Robin';
+  const voice=make('details','voice-settings'),preset=make('select','voice-preset'),emotion=make('select','voice-emotion');
+  voice.append(preset,emotion);form.append(name,voice);aside.append(form);
   const conversation=make('section',null,'conversation'),heading=make('div',null,'conversation-heading'),tools=make('div',null,'conversation-tools');
   const record=make('button','record'),typed=make('form','typed-form'),compare=make('button','open-comparison'),messages=make('div','messages'),empty=make('div','empty-state');
   tools.append(compare);heading.append(tools);messages.append(empty);conversation.append(heading,record,typed,messages);main.append(aside,conversation);document.body.append(header,main);
@@ -83,7 +85,7 @@ test('galleryRecords validates source URLs, IDs and collections while retaining 
 
 test('mount retains the existing profile, text, microphone and comparison nodes and moves settings into a dialog',()=>{
   const {gallery,document,nodes,reveal}=setup();let recordClicks=0;nodes.record.addEventListener('click',()=>recordClicks++);
-  assert.equal(document.title,'Character Studio · Archive gallery');assert.equal(document.body.classList.contains('gallery-page'),true);
+  assert.equal(document.title,'Art Archive Studio · Gallery');assert.equal(document.body.classList.contains('gallery-page'),true);
   assert.equal(document.getElementById('character-form'),nodes.form);assert.equal(nodes.name.value,'Existing Robin');
   assert.equal(nodes.aside.parentNode.id,'gallery-settings');assert.equal(nodes.typed.parentNode,nodes.conversation);
   assert.equal(nodes.tools.parentNode.className,'gallery-session-options');assert.equal(document.getElementById('open-comparison'),nodes.compare);
@@ -95,6 +97,23 @@ test('mount retains the existing profile, text, microphone and comparison nodes 
   document.getElementById('gallery-open-settings').emit('click');assert.equal(document.getElementById('gallery-settings').open,true);
   document.getElementById('gallery-replay').emit('click');assert.equal(reveal.replays,1);
   assert.equal(gallery.records.length,0);assert.equal(nodes.messages.parentNode,nodes.conversation);
+});
+
+test('gallery voice button opens the same form controls directly and character settings restore the full view',()=>{
+  const {gallery,document,nodes}=setup();
+  const preset=document.getElementById('voice-preset'),emotion=document.getElementById('voice-emotion');
+  document.getElementById('gallery-open-voice').emit('click');
+  const dialog=document.getElementById('gallery-settings');
+  assert.equal(dialog.open,true);assert.equal(dialog.getAttribute('data-settings-view'),'voice');
+  assert.equal(document.getElementById('gallery-settings-title').textContent,'Voice & delivery');
+  assert.equal(document.getElementById('voice-settings').open,true);assert.equal(document.activeElement,preset);
+  assert.equal(preset.parentNode.parentNode,nodes.form);
+  dialog.close();preset.disabled=true;gallery.openVoiceSettings();assert.equal(document.activeElement,emotion);
+  document.getElementById('gallery-open-settings').emit('click');
+  assert.equal(dialog.getAttribute('data-settings-view'),'character');
+  assert.equal(document.getElementById('gallery-settings-title').textContent,'Character & collections');
+  assert.equal(document.getElementById('voice-preset'),preset);
+  const brand=document.body.querySelector('.gallery-header-title');assert.equal(brand.textContent,'Art Archive Studio');assert.equal(brand.href,'/archive/');
 });
 
 test('retrieval text remains literal and bounded, with source navigation only to a vetted public URL',()=>{

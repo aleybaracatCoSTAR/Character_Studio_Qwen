@@ -25,7 +25,7 @@
 <p id="archive-qtm-credit" class="hint small archive-credit">Queering the Map material: <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC-SA 4.0</a>. Imported and pasted passages remain labelled separately. End the call before editing the archive.</p>
 </details>
 <details><summary>World & memories</summary><label>Environment<textarea name="environment" rows="3" maxlength="700"></textarea></label><label>Memories<textarea name="memories" rows="3" maxlength="1200"></textarea></label><label>What must stay true?<textarea name="rules" rows="3" maxlength="1000"></textarea></label><label>Current story moment<textarea name="beat" rows="2" maxlength="500"></textarea></label></details>
-<details><summary>How they speak</summary>
+<details id="voice-settings"><summary>How they speak</summary>
 <label>Voice<select id="voice-preset"><option value="automatic">Automatic</option><option value="female">Female · British</option><option value="male">Male · British</option><option value="custom">Custom reference</option></select></label>
 <p id="engine-voice-note" class="hint small" hidden>Streaming Qwen3-Omni is turn-based and uses built-in voices. Choose Female, Male or Automatic. Uploaded references are not supported; your saved voice choice is kept.</p>
 <audio id="preset-audio" controls preload="metadata" hidden></audio>
@@ -35,11 +35,16 @@
 <label>Expression<select id="voice-event" data-live-setting="true"><option value="none">None</option><option value="sigh">Sigh</option><option value="laugh">Laugh</option></select></label></div>
 <label>Vocal direction<textarea id="voice-direction" data-live-setting="true" maxlength="200" rows="2" placeholder="E.g. a shaky voice, urgent and breathless…"></textarea></label>
 <p class="hint small" id="delivery-note">Change emotion during a call; it applies to the next reply. Drama 3 interprets delivery cues, so results can vary.</p>
-<div id="custom-voice-fields" hidden><label>Upload a voice reference<input id="voice-reference" type="file" accept=".wav,audio/wav,audio/x-wav"></label>
-<p class="hint small">Optional: a 2–15 second PCM16 WAV, up to 2 MB. Without a clip, the first generated phrase sets this call's voice.</p>
+<div id="custom-voice-fields" hidden>
+<label>My saved voices<select id="saved-voice"><option value="">Upload a new reference</option></select></label>
+<label>Upload a voice reference<input id="voice-reference" type="file" accept=".wav,audio/wav,audio/x-wav"></label>
+<p class="hint small">Custom voice: a 2–15 second PCM16 WAV, mono or stereo at 8–48 kHz, up to 2 MB. Choose Automatic if you do not want to supply a clip.</p>
 <div id="reference-preview" hidden><audio id="reference-audio" controls preload="metadata"></audio><button type="button" id="clear-reference" class="quiet">Remove reference</button></div>
 <label>Exact words spoken in the reference<textarea id="reference-text" rows="2" maxlength="500" placeholder="Enter the clip's transcript…"></textarea></label>
-<p class="hint small">Voice clips go only to your local Drama 3 server for the call. They are not saved in the character profile. Select the clip again after reloading or switching characters.</p></div>
+<label>Save this voice as<input id="save-voice-name" maxlength="80" placeholder="e.g. Robin’s voice"></label>
+<button type="button" id="save-voice" class="secondary">Save voice</button>
+<p id="saved-voice-status" class="hint small" role="status" aria-live="polite"></p>
+<p class="hint small">Save voice keeps the WAV and transcript in this browser on this address. Your character remembers its saved voice; clips are sent only to your connected Drama 3 server when you start a call. Unsaved uploads last for this visit. Saved clips are separate from character JSON downloads.</p></div>
 </details>
 <details><summary>Emotional trigger</summary>
 <label class="trigger-toggle"><input type="checkbox" id="trigger-enabled"> Enable a reaction</label>

@@ -360,6 +360,7 @@ body.gallery-page .gallery-conversation .conversation {
 
 body.gallery-page .conversation-heading { align-items: flex-start; flex-shrink: 0; gap: 10px; margin-bottom: 5px; }
 body.gallery-page .conversation-heading h2 { margin: 0; font: 700 19px/1.35 "Avara", Georgia, serif; letter-spacing: -.15px; color: #e4d8c5; }
+body.gallery-page .conversation-heading .gallery-voice-button { flex-shrink: 0; margin-top: 3px; padding: 3px 0; color: #d9c5a7; font: 400 11px/1.5 var(--font-sans, sans-serif); text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
 body.gallery-page .conversation-heading .eyebrow,
 body.gallery-page .conversation-heading .live-badge,
 body.gallery-page .conversation #comparison-engine-note,
@@ -480,6 +481,14 @@ body.gallery-page #gallery-settings aside > .section-heading { margin-bottom: 12
 body.gallery-page #gallery-settings #character-form { margin-top: 20px; }
 body.gallery-page #gallery-settings .gallery-settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 body.gallery-page #gallery-settings .gallery-settings-heading h2 { margin: 0; font-size: 28px; }
+body.gallery-page #gallery-settings[data-settings-view="voice"] aside > :not(#character-form),
+body.gallery-page #gallery-settings[data-settings-view="voice"] #character-form > :not(#voice-settings),
+body.gallery-page #gallery-settings[data-settings-view="voice"] #voice-settings > summary { display: none; }
+body.gallery-page #gallery-settings[data-settings-view="voice"] aside,
+body.gallery-page #gallery-settings[data-settings-view="voice"] #character-form { margin-top: 0; padding-top: 0; }
+body.gallery-page #gallery-settings[data-settings-view="voice"] #voice-settings { border: 0; margin: 8px 0 0; padding: 0; }
+body.gallery-page #gallery-settings .voice-library-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+body.gallery-page #gallery-settings audio { width: 100%; }
 
 body.gallery-page :is(button, a, input, textarea, select, summary):focus-visible { outline: 2px solid #e0bd83; outline-offset: 4px; }
 body.gallery-page dialog :is(button, a, input, textarea, select, summary):focus-visible { outline-color: #8d5d31; }
