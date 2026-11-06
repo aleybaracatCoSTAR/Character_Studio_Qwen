@@ -7,6 +7,7 @@ import {DirectorPanel} from './live-director-panel.mjs';
 import {CallFeedback} from './live-feedback.mjs';
 import {CharacterLibrary,legacyRecoveryProfiles} from './live-characters.mjs';
 import {ArchivePanel} from './live-archive.mjs';
+import {ArtworkChat} from './live-artwork.mjs';
 import {ListeningFeedback} from './live-listening.mjs';
 import {VoiceProgress} from './live-voice-progress.mjs';
 import {BargeInController} from './live-barge-in.mjs';
@@ -25,6 +26,7 @@ const conversation=new Conversation($('messages'),$('empty-state'));
 const callFeedback=new CallFeedback($('feedback'));
 const inspector=new PromptInspector({document,send});
 const archivePanel=new ArchivePanel({document,onChange:()=>saveActiveProfile()});
+const artworkChat=new ArtworkChat({document,container:$('messages'),empty:$('empty-state')});
 const listeningFeedback=new ListeningFeedback({label:$('listening-mode'),partial:$('listening-partial'),
   onFinalizing:()=>{holdMicrophone();state('Finishing recognition… · Mic paused');},
   onListening:()=>{if(bargeIn.pending||replyPending&&bargeIn.isSuppressed(currentTurn))return;if(replyPending)resumeMicrophone();else state('Listening…');},
@@ -44,7 +46,7 @@ function triggerSettings(){return $('trigger-enabled').checked?{
 const replies=conversation.replies;
 const voiceProgress=new VoiceProgress({onState:state,onTiming:text=>{$('timing').textContent=text;},onText:text=>{
   if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
-  replies.get(currentTurn).content.textContent=text;$('messages').scrollTop=$('messages').scrollHeight;
+  replies.get(currentTurn).content.textContent=text;scrollMessages();
 }});
 const bargeIn=new BargeInController({send:value=>{
   if(value instanceof ArrayBuffer){if(socket?.readyState===WebSocket.OPEN)socket.send(value);}else send(value);
@@ -131,7 +133,7 @@ function applyProfile(profile){
     clearReference();updateVoicePreset();
     $('chat-title').textContent=`Talk to ${profile.character.name.trim()||'your character'}`;
     clearTimeout(resumeTimer);replyPending=false;currentTurn=0;triggerActive=false;
-    playback?.clear();bargeIn.reset();conversation.reset();inspector.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();
+    playback?.clear();bargeIn.reset();conversation.reset();artworkChat.reset();inspector.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();
     if($('model-inspector').open)$('model-inspector').close();
     $('director-latest').hidden=true;$('director-note').textContent='';$('timing').textContent='';
     $('typed-form').hidden=true;$('typed-message').value='';$('trigger-state').textContent='Start a call to test the reaction.';
@@ -199,12 +201,14 @@ function controls(){
   document.querySelector('.live-badge').classList.toggle('active',!!connected);storyControls();
 }
 function message(speaker,text,kind='assistant'){return conversation.message(speaker,text,kind);}
+function scrollMessages(){if(!artworkChat.scrollForReply())$('messages').scrollTop=$('messages').scrollHeight;}
 async function disconnect(){
   if(disconnecting)return disconnecting;
   const previous=socket,oldContext=context,oldStream=stream,oldCapture=capture,oldPlayback=playback;
   socket=null;context=null;stream=null;capture=null;playback=null;connecting=true;
   inspector.setConnected(false);
   archivePanel.resetSources();
+  artworkChat.disconnect();
   listeningFeedback.reset();
   bargeIn.reset();interruptionsPermitted=false;
   voiceRetry.clear();
@@ -229,7 +233,7 @@ function event(data){
   if(bargeIn.isSuppressed(data.turn_id)&&data.type!=='interrupted')return;
   if(data.type==='listening_state'||data.type==='listening_partial'){listeningFeedback.accept(data);return;}
   if(data.type==='model_inspection'){inspector.accept(data);return;}
-  if(data.type==='archive_sources'){archivePanel.showSources(data);return;}
+  if(data.type==='archive_sources'){if(archivePanel.showSources(data))artworkChat.accept(data,archivePanel.sourceMatches);return;}
   if(data.type==='story_state'){renderStory(data);return;}
   if(data.type==='story_decision'){$('story-reason').textContent=`Director held this beat: ${data.reason}`;return;}
   if(data.type==='director_ack'){feedback(data.message);return;}
@@ -249,7 +253,7 @@ function event(data){
   if(data.type==='ready'){listeningFeedback.setMode(data.listening_mode);sessionReady=true;interruptionsPermitted=data.interruptions===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
-  if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;bargeIn.begin(data.turn_id);listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
+  if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;bargeIn.begin(data.turn_id);listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);artworkChat.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
   if(data.type==='interrupted'){
     if(data.turn_id===currentTurn){voiceProgress.finish(currentTurn);voiceRetry.clear();playback.clear();if(!bargeIn.isSuppressed(data.turn_id))resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
     return;
@@ -264,7 +268,7 @@ function event(data){
   if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.display_text??data.text,'user');state($('director-enabled').checked?'Directing the next reply… · Mic paused':$('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
   if(data.type==='text_delta'){
     if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
-    replies.get(currentTurn).content.textContent+=data.text;$('messages').scrollTop=$('messages').scrollHeight;
+    replies.get(currentTurn).content.textContent+=data.text;scrollMessages();
   }
   if(data.type==='phrase_done')playback.phraseDone(data.seq);
   if(data.type==='response_done'){
@@ -287,7 +291,7 @@ async function connect(useMic=true){
   }
   connecting=true;feedback();controls();
   try{
-    conversation.reset();bargeIn.reset();interruptionsPermitted=false;inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
+    conversation.reset();artworkChat.reset();bargeIn.reset();interruptionsPermitted=false;inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}

@@ -10,7 +10,7 @@ from live_voice.collections import CollectionDatabase
 from live_voice.museum_aic import ENDPOINT, iter_records
 from live_voice.museum_common import MuseumImportError, museum_record
 from live_voice.museum_images import MuseumImages, MuseumImageUnavailable
-from live_voice.museum_import import MuseumHTTP, MuseumImporter
+from live_voice.museum_import import MuseumHTTP, MuseumImporter, _bounded_structure
 
 
 IMAGE_ID = '12345678-1234-5678-abcd-123456789abc'
@@ -119,6 +119,22 @@ class MuseumTransportReview(unittest.TestCase):
                     transport(ENDPOINT)
                 self.assertEqual(caught.exception.reason, 'invalid_response')
                 self.assertNotIn('private', str(caught.exception))
+
+    def test_decoded_structure_depth_limit_is_inclusive_and_decoder_independent(self):
+        def nested(depth):
+            value = 0
+            for _ in range(depth - 1):
+                value = [value]
+            return {'data': value}
+        allowed = nested(64)
+        self.assertIs(_bounded_structure(allowed), allowed)
+        with self.assertRaises(ValueError):
+            _bounded_structure(nested(65))
+        with patch('live_voice.museum_import.MAX_JSON_VALUES', 5):
+            allowed = {'data': [0, 1, 2]}
+            self.assertIs(_bounded_structure(allowed), allowed)
+            with self.assertRaises(ValueError):
+                _bounded_structure({'data': [0, 1, 2, 3]})
 
 
 class MuseumRecordReview(unittest.TestCase):

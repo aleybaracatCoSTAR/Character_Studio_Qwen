@@ -19,6 +19,8 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_REQUESTS = 2500
 MAX_IMPORT_SECONDS = 600
+MAX_JSON_DEPTH = 64
+MAX_JSON_VALUES = 250_000
 _PATHS = {
     'met':('collectionapi.metmuseum.org', re.compile(r'/public/collection/(?:v1\.1/search|v1/objects/[0-9]{1,12})/?\Z')),
     'aic':('api.artic.edu', re.compile(r'/api/v1/artworks(?:/search|/[0-9]{1,12})?/?\Z')),
@@ -44,6 +46,24 @@ def museum_error(error, provider):
     reason = error.reason if isinstance(error,MuseumImportError) else 'unavailable'
     return {'source':provider, 'reason':reason,
             'message':ERROR_MESSAGES.get(reason,ERROR_MESSAGES['unavailable'])}
+
+
+def _bounded_structure(value):
+    """Apply the same nesting limit on Python versions with different decoders."""
+    stack, visited = [iter((value,))], 0
+    while stack:
+        try: current = next(stack[-1])
+        except StopIteration:
+            stack.pop(); continue
+        visited += 1
+        if visited>MAX_JSON_VALUES: raise ValueError('Catalogue JSON exceeds its structure limit.')
+        if isinstance(current,(dict,list)):
+            if len(stack)>MAX_JSON_DEPTH: raise ValueError('Catalogue JSON exceeds its nesting limit.')
+            stack.append(iter(current.values()) if isinstance(current,dict) else iter(current))
+    return value
+
+
+def _invalid_constant(value): raise ValueError('Use standard JSON values.')
 
 
 class MuseumHTTP:
@@ -105,7 +125,7 @@ class MuseumHTTP:
                             raise MuseumImportError(self.provider,'invalid_response')
                         self.bytes += len(part)
                         raw.extend(part)
-                    value = json.loads(raw)
+                    value = _bounded_structure(json.loads(raw,parse_constant=_invalid_constant))
                     if not isinstance(value,dict): raise MuseumImportError(self.provider,'invalid_response')
                     return value
             except httpx.TimeoutException:

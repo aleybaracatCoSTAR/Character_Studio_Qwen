@@ -65,7 +65,7 @@ export function archiveSourceURL(value){
 export class ArchivePanel {
   constructor({document,fetch=(...args)=>globalThis.fetch(...args),onChange=()=>{}}){
     this.document=document;this.fetch=fetch;this.onChange=onChange;
-    this.entries=[];this.selectedIds=new Set();this.loaded=false;this.busy=false;this.pending=false;this.profileEpoch=0;this.turnId=0;
+    this.entries=[];this.selectedIds=new Set();this.loaded=false;this.busy=false;this.pending=false;this.profileEpoch=0;this.turnId=0;this._sourceMatches=[];
     this.libraryMode=false;this.total=0;this.matched=0;this.offset=0;this.limit=PAGE_SIZE;this.query='';
     this.scope='selected';this.refreshNeeded=false;this.selectionNeeded=false;
     this.collectionIds=[];this.collections=[{id:'qtm',label:'Queering the Map',source_kind:'qtm',count:0,has_images:false}];this.collectionsSupported=null;
@@ -102,6 +102,7 @@ export class ArchivePanel {
     this.enabled=false;this.apply({enabled:false,entry_ids:[]});
   }
   get(id){return this.document.getElementById(id);}
+  get sourceMatches(){return this._sourceMatches.map(entry=>({...entry,metadata:{...entry.metadata}}));}
   settings(){return {enabled:!!this.enabled,scope:this.scope,entry_ids:[...this.selectedIds],...(this.collectionIds.length?{collection_ids:[...this.collectionIds]}:{})};}
   notify(){this.onChange(this.settings());}
   apply(settings={}){
@@ -506,7 +507,7 @@ export class ArchivePanel {
     if(turn_id!==this.turnId){this.resetSources();this.turnId=turn_id;}
   }
   resetSources(){
-    this.turnId=0;this.get('archive-reply-sources').hidden=true;this.get('archive-sources-list').replaceChildren();
+    this.turnId=0;this._sourceMatches=[];this.get('archive-reply-sources').hidden=true;this.get('archive-sources-list').replaceChildren();
     this.get('archive-sources-summary').textContent='Sources for this reply';this.get('archive-sources-note').textContent='';
     this.get('archive-reply-sources').open=false;
     this.get('archive-artworks').hidden=true;this.get('archive-artworks-list').replaceChildren();
@@ -519,14 +520,20 @@ export class ArchivePanel {
     const seen=new Set();
     const matches=event.matches.filter(entry=>entry&&validId(entry.id)&&!seen.has(recordKey(entry))&&(this.scope==='library'||this.selectedIds.has(entry.id))
       &&(this.collectionIds.length?this.collectionIds.includes(entry.collection_id):!entry.collection_id||entry.collection_id==='qtm')
-      &&typeof (entry.excerpt??entry.text)==='string'&&entryURL(entry)!==null&&(seen.add(recordKey(entry)),true)).slice(0,3);
+      &&typeof (entry.excerpt??entry.text)==='string'&&entryURL(entry)!==null&&(seen.add(recordKey(entry)),true)).slice(0,3).map(entry=>({
+        id:entry.id,title:typeof entry.title==='string'?entry.title.slice(0,120):'Saved passage',excerpt:(entry.excerpt??entry.text).slice(0,12000),
+        source_url:entryURL(entry)||'',source_entry_id:typeof entry.source_entry_id==='string'?entry.source_entry_id.slice(0,128):null,
+        collection_id:validCollectionId(entry.collection_id)?entry.collection_id:'qtm',collection_label:typeof entry.collection_label==='string'?entry.collection_label.slice(0,80):'',
+        source_kind:entryKind(entry),provenance:['fetched','imported'].includes(entry.provenance)?entry.provenance:'pasted',
+        image_url:publicArchiveURL(entry.image_url)||'',image_alt:typeof entry.image_alt==='string'?entry.image_alt.slice(0,300):'',metadata:metadata(entry.metadata)}));
+    this._sourceMatches=matches;
     const list=this.get('archive-sources-list');list.replaceChildren();
     for(const entry of matches){
       const card=this.document.createElement('article'),title=this.document.createElement('h3'),text=this.document.createElement('p');
       card.className='archive-source';title.textContent=typeof entry.title==='string'?entry.title.slice(0,120):'Saved passage';
       text.className='archive-story-text';text.textContent=(entry.excerpt??entry.text).slice(0,12000);card.append(title,text);this.provenance(card,entry);list.append(card);
     }
-    this.renderArtworks(matches);
+    this.renderArtworks(event.image_request===true?[]:matches);
     const size=count(event.selected_count),generic=this.collectionIds.length>0,collection=generic?'your selected collections':this.scope==='library'?'your local archive':'your selected stories';
     this.get('archive-sources-summary').textContent=`Sources for this reply · ${matches.length}`;
     this.get('archive-sources-note').textContent=matches.length

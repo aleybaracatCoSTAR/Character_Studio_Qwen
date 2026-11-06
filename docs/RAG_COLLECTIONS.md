@@ -8,7 +8,7 @@ Robin is fictional, not a museum representative. Images are displayed to the vis
 
 ## Retrieval and storage
 
-This is **lexical RAG**: SQLite FTS5 retrieves ranked records, bounded source data enters the prompt, and the character generates a grounded response. It does not install embeddings or perform visual similarity search. Artist, title, medium and wording in the records are searchable; conceptual similarities absent from the text may not match.
+This is **lexical RAG**: SQLite FTS5 and a bounded artist/title/date index retrieve records, bounded source data enters the prompt, and the character generates a grounded response. It does not install embeddings or perform visual similarity search. Artist, title, medium and wording in the records are searchable; conceptual similarities absent from the text may not match. [Spelling tolerance, spoken-year searches and Show me the image](ARTWORK_SEARCH.md).
 
 A call freezes its selected sources. Each turn gets at most three records and 6,000 excerpt characters plus bounded metadata. Generic collections share one frozen index copy; QTM retains its own snapshot. Independent index results merge by rank, without comparing incompatible BM25 scores. Simple follow-ups about date, artist or medium retain the previous meaningful search. Multiple matching artworks remain ambiguous rather than implying a unique selection.
 

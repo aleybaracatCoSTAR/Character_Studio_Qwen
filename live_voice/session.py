@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import math
@@ -16,6 +17,7 @@ from .turns import ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
 from .archive import retrieve, grounding_messages
 from .collections import collection_grounding_messages
+from .artwork_requests import image_request, image_context, image_reference_ack
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,7 @@ class LiveSession:
         self.archive_entries = tuple(archive_entries) if self.archive else ()
         self.archive_search = archive_search if self.archive else None
         self.last_archive_context = None
+        self.last_archive_matches = []
 
     async def story_state(self):
         if self.story.revision != self.story_seen_revision:
@@ -309,20 +312,32 @@ class LiveSession:
             archive_context = None
             if self.archive:
                 scope = self.archive.scope
+                requested_image = image_request(text) if not action else None
+                search_text = requested_image['query'] if requested_image and not requested_image['followup'] else text
+                search_history = () if requested_image else director_context
                 if scope == 'library':
                     if self.archive_search is None: raise ValueError('The local archive snapshot is unavailable.')
-                    matches = await asyncio.to_thread(self.archive_search.search, text, director_context)
+                    matches = (copy.deepcopy(self.last_archive_matches) if requested_image and requested_image['followup']
+                               else await asyncio.to_thread(self.archive_search.search, search_text, search_history))
                     count = self.archive_search.count
                 else:
-                    matches = retrieve(self.archive_entries, text, director_context)
+                    matches = (copy.deepcopy(self.last_archive_matches) if requested_image and requested_image['followup']
+                               else retrieve(self.archive_entries, search_text, search_history))
                     count = len(self.archive_entries)
                 archive_context = (collection_grounding_messages(matches) if self.archive.collection_ids
                                    else grounding_messages(matches, scope=scope))
+                if requested_image:
+                    archive_context.append({'role':'system','content':image_context(requested_image,matches)})
                 self.last_archive_context = archive_context
                 source_event = {'type':'archive_sources','turn_id':turn_id,'scope':scope,
                                 'selected_count':count,'matches':matches}
                 if self.archive.collection_ids: source_event['collection_ids'] = self.archive.collection_ids
+                if requested_image: source_event['image_request'] = True
                 await self.send_json(source_event)
+                # Only published references become the next visual referent.
+                # A brief acknowledgement does not replace the artwork topic.
+                if matches or requested_image or not image_reference_ack(text):
+                    self.last_archive_matches = copy.deepcopy(list(matches)[:3])
             plan = None
             if self.director.enabled:
                 check_started = time.perf_counter()
@@ -526,6 +541,7 @@ class LiveSession:
         self.retryable_voice = None
         self.archive_entries = ()
         self.last_archive_context = None
+        self.last_archive_matches = []
         if self.story_director_task:
             self.story_director_task.cancel();await asyncio.gather(self.story_director_task,return_exceptions=True)
         if self.story_task:
