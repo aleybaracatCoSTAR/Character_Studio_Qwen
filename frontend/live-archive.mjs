@@ -9,6 +9,14 @@ const validCollectionId=value=>typeof value==='string'&&/^[a-z0-9][a-z0-9-]{0,63
 const recordKey=entry=>(validCollectionId(entry.collection_id)?entry.collection_id:'qtm')+'|'+entry.id;
 const collectionIds=values=>[...new Set(Array.isArray(values)?values.filter(validCollectionId):[])].slice(0,8);
 const METADATA=['artist','date','medium','dimensions','credit_line','accession_number','classification','rights'];
+const MUSEUM_SOURCES=[
+  {id:'met',label:'The Metropolitan Museum of Art'},
+  {id:'aic',label:'Art Institute of Chicago'},
+  {id:'cleveland',label:'Cleveland Museum of Art'},
+  {id:'rijksmuseum',label:'Rijksmuseum'},
+  {id:'getty',label:'J. Paul Getty Museum'}
+];
+const museumSource=id=>MUSEUM_SOURCES.find(source=>source.id===id);
 export function publicArchiveURL(value){
   if(!value)return '';
   if(typeof value!=='string'||value.length>2048||/[\s\u0000-\u001f\u007f]/.test(value))return null;
@@ -19,6 +27,11 @@ export function publicArchiveURL(value){
         ||!host.split('.').every(label=>/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)))return null;
     return url.href;
   }catch(error){return null;}
+}
+export function displayArchiveImageURL(value){
+  const url=publicArchiveURL(value);if(!url)return url;
+  const aic=/^https:\/\/www\.artic\.edu\/iiif\/2\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/full\/400,\/0\/default\.jpg$/.exec(url);
+  return aic?'/api/archive/museum-images/aic/'+aic[1]:url;
 }
 const entryKind=entry=>['qtm','nga','custom'].includes(entry.source_kind)?entry.source_kind
   :entry.collection_id==='national-gallery-of-art'?'nga':entry.collection_id&&entry.collection_id!=='qtm'?'custom':'qtm';
@@ -56,6 +69,7 @@ export class ArchivePanel {
     this.libraryMode=false;this.total=0;this.matched=0;this.offset=0;this.limit=PAGE_SIZE;this.query='';
     this.scope='selected';this.refreshNeeded=false;this.selectionNeeded=false;
     this.collectionIds=[];this.collections=[{id:'qtm',label:'Queering the Map',source_kind:'qtm',count:0,has_images:false}];this.collectionsSupported=null;
+    this.museumSources=MUSEUM_SOURCES.map(source=>({...source}));this.museumsSupported=null;this.museumLoadNotice='';
     this.dialog=this.get('archive-dialog');
     this.get('archive-enabled').addEventListener('change',()=>{
       if(this.busy||this.pending){this.get('archive-enabled').checked=this.enabled;return;}
@@ -81,6 +95,10 @@ export class ArchivePanel {
     this.get('archive-collection-close').addEventListener('click',()=>this.get('archive-collection-dialog').close());
     this.get('archive-collection-dialog').addEventListener('close',()=>this.clearCollectionForm());
     this.get('archive-collection-form').addEventListener('submit',event=>{event.preventDefault();void this.createCollection();});
+    this.get('archive-add-museum')?.addEventListener('click',()=>void this.openMuseum());
+    this.get('archive-museum-close')?.addEventListener('click',()=>this.get('archive-museum-dialog').close());
+    this.get('archive-museum-dialog')?.addEventListener('close',()=>this.clearMuseumForm());
+    this.get('archive-museum-form')?.addEventListener('submit',event=>{event.preventDefault();void this.importMuseum();});
     this.enabled=false;this.apply({enabled:false,entry_ids:[]});
   }
   get(id){return this.document.getElementById(id);}
@@ -88,6 +106,7 @@ export class ArchivePanel {
   notify(){this.onChange(this.settings());}
   apply(settings={}){
     this.profileEpoch++;
+    this.museumLoadNotice='';
     const previous=this.collectionIds.join(',');this.collectionIds=collectionIds(settings.collection_ids);
     this.enabled=!!settings.enabled;this.get('archive-enabled').checked=this.enabled;
     this.scope=this.collectionIds.length||settings.scope==='library'?'library':'selected';this.get('archive-scope').value=this.scope;
@@ -99,12 +118,14 @@ export class ArchivePanel {
     }
     if(this.dialog.open)this.dialog.close();else this.clearForm();
     if(this.get('archive-collection-dialog').open)this.get('archive-collection-dialog').close();else this.clearCollectionForm();
+    if(this.get('archive-museum-dialog')?.open)this.get('archive-museum-dialog').close();else this.clearMuseumForm();
     this.get('archive-import-file').value='';this.resetSources();this.render();
     if(this.loaded&&!this.busy&&!this.pending){if(this.refreshNeeded)this.followUp();else if(this.libraryMode)void this.validateSelection();}
   }
   setBusy(busy){
     this.busy=!!busy;if(this.busy&&this.dialog.open)this.dialog.close();this.controls();
     if(this.busy&&this.get('archive-collection-dialog').open)this.get('archive-collection-dialog').close();
+    if(this.busy&&this.get('archive-museum-dialog')?.open)this.get('archive-museum-dialog').close();
     if(!this.busy&&!this.pending)this.followUp();
   }
   controls(){
@@ -119,8 +140,12 @@ export class ArchivePanel {
     this.get('archive-qtm-note').hidden=this.collectionIds.length>0;
     this.get('archive-qtm-credit').hidden=this.collectionIds.length>0;
     this.get('archive-add-collection').disabled=blocked||this.collectionsSupported!==true;
+    if(this.get('archive-add-museum'))this.get('archive-add-museum').disabled=blocked||this.collectionsSupported!==true;
     this.get('archive-collection-tools').hidden=this.collectionsSupported===false;
     for(const id of ['archive-collection-name','archive-collection-file','archive-collection-submit'])this.get(id).disabled=blocked;
+    for(const id of ['archive-museum-source','archive-museum-query','archive-museum-limit'])if(this.get(id))this.get(id).disabled=blocked;
+    if(this.get('archive-museum-submit'))this.get('archive-museum-submit').disabled=blocked||this.museumsSupported!==true;
+    this.get('archive-museum-form')?.setAttribute('aria-busy',String(this.pending));
     for(const node of this.get('archive-collections').querySelectorAll('input'))node.disabled=blocked||(!node.checked&&this.collectionIds.length>=8);
     this.get('archive-import').disabled=blocked||!this.get('archive-import-file').files?.length;
     this.get('archive-previous').disabled=blocked||!this.libraryMode||this.offset===0;
@@ -211,6 +236,74 @@ export class ArchivePanel {
     }catch(error){if(this.current(epoch)){this.get('archive-collection-error').textContent=error.message;if(!this.get('archive-collection-dialog').open)this.get('archive-status').textContent=error.message;}return false;}
     finally{this.finish();}
   }
+  clearMuseumForm(){
+    for(const [id,value] of [['archive-museum-query',''],['archive-museum-limit','25'],['archive-museum-error','']]){
+      const node=this.get(id);if(node){if(id==='archive-museum-error')node.textContent=value;else node.value=value;}
+    }
+  }
+  renderMuseumSources(){
+    const select=this.get('archive-museum-source');if(!select)return;
+    const previous=select.value;select.replaceChildren();
+    for(const source of this.museumSources){const option=this.document.createElement('option');option.value=source.id;option.textContent=source.label;select.append(option);}
+    select.value=this.museumSources.some(source=>source.id===previous)?previous:this.museumSources[0]?.id||'';
+  }
+  async loadMuseumSources(){
+    if(this.busy||this.pending)return false;
+    const epoch=this.profileEpoch;this.pending=true;this.controls();
+    try{
+      const result=await this.response('/api/archive/museums');
+      if(!Array.isArray(result.sources))throw new Error('The archive server returned an unreadable museum list.');
+      const available=new Set(result.sources.filter(source=>museumSource(source?.id)).map(source=>source.id));
+      if(!available.size)throw new Error('No museum sources are available on this server.');
+      this.museumSources=MUSEUM_SOURCES.filter(source=>available.has(source.id)).map(source=>({...source}));this.museumsSupported=true;
+      if(this.current(epoch))this.renderMuseumSources();return true;
+    }catch(error){this.museumsSupported=false;if(this.current(epoch))this.get('archive-museum-error').textContent=error.message;return false;}
+    finally{this.finish();}
+  }
+  async openMuseum(){
+    if(this.busy||this.pending||this.collectionsSupported!==true||!this.get('archive-museum-dialog'))return false;
+    this.clearMuseumForm();this.renderMuseumSources();this.get('archive-museum-dialog').showModal();
+    return this.loadMuseumSources();
+  }
+  museumErrors(values){
+    if(!Array.isArray(values))return '';
+    return values.filter(value=>museumSource(value?.source)).slice(0,5).map(value=>{
+      const label=museumSource(value.source).label;
+      const message=value.reason==='no_results'?'No matching catalogue records were found.':value.reason==='rate_limited'?'The museum is busy. Please try again later.':value.reason==='timeout'?'The museum took too long to respond. Please try again.':'The museum import could not be completed. Try another search or try again.';
+      return label+': '+message;
+    }).join(' ');
+  }
+  async importMuseum(){
+    if(this.busy||this.pending||this.collectionsSupported!==true||this.museumsSupported!==true)return false;
+    const source=this.get('archive-museum-source').value,query=this.get('archive-museum-query').value.trim(),limit=Number(this.get('archive-museum-limit').value);
+    const errorNode=this.get('archive-museum-error');
+    if(!museumSource(source)){errorNode.textContent='Choose one of the available museum sources.';return false;}
+    if(!query||query.length>200||/[\u0000-\u001f\u007f]/.test(query)){errorNode.textContent='Enter an artist or subject up to 200 characters.';return false;}
+    if(![25,50,100,200].includes(limit)){errorNode.textContent='Choose a record limit of 25, 50, 100 or 200.';return false;}
+    const epoch=this.profileEpoch,previous=this.collectionIds.length?[...this.collectionIds]:['qtm'];
+    this.pending=true;this.controls();errorNode.textContent='Importing catalogue records…';
+    try{
+      const result=await this.response('/api/archive/museums/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source,query,limit})});
+      if(!Array.isArray(result.results)||!Array.isArray(result.errors))throw new Error('The archive server returned an unreadable museum import.');
+      const imported=result.results.filter(value=>value?.source===source&&validCollectionId(value.collection?.id)).slice(0,5);
+      if(result.results.length&&!imported.length)throw new Error('The archive server returned an unreadable museum import.');
+      this.setCollections([...this.collections.filter(value=>!imported.some(item=>item.collection.id===value.id)),...imported.map(value=>value.collection)]);
+      // Importing adds records globally. Only the character that started this
+      // request may acquire the newly imported collections.
+      try{const refreshed=await this.response('/api/archive/collections');this.setCollections(refreshed.collections);}catch(error){/* The import response still supplies the new collection metadata. */}
+      if(!this.current(epoch))return imported.length>0;
+      const warnings=this.museumErrors(result.errors),next=[...new Set([...imported.map(value=>value.collection.id),...previous])];
+      if(imported.length){
+        const canSelect=next.length<=8;
+        if(canSelect){this.collectionIds=next;this.scope='library';this.selectedIds.clear();this.query=query;this.get('archive-search').value=query;this.get('archive-scope').value='library';this.notify();this.resetSources();this.refreshNeeded=true;}
+        const added=imported.reduce((total,value)=>total+count(value.added),0);
+        const status=`Imported ${added.toLocaleString()} catalogue records from ${museumSource(source).label}. This is a search subset, not the entire museum.`+(canSelect?'':' Your eight selected collections were kept. Uncheck a collection before selecting this museum.')+(warnings?' '+warnings:'');
+        this.museumLoadNotice=canSelect?status:'';this.get('archive-museum-dialog').close();this.get('archive-status').textContent=status;return true;
+      }
+      errorNode.textContent=warnings||'No catalogue records were imported. Try another artist or subject.';return false;
+    }catch(error){if(this.current(epoch)){errorNode.textContent=error.message;if(!this.get('archive-museum-dialog').open)this.get('archive-status').textContent=error.message;}return false;}
+    finally{this.finish();}
+  }
   setEntries(entries){
     if(!Array.isArray(entries))throw new Error('The archive server returned an unreadable story list.');
     const seen=new Set();
@@ -270,8 +363,8 @@ export class ArchivePanel {
       if(this.libraryMode)await this.validateSelected(epoch);
       else{const before=JSON.stringify([...this.selectedIds]);this.filterSelection();if(before!==JSON.stringify([...this.selectedIds]))this.notify();}
       if(!this.current(epoch))return false;
-      this.get('archive-status').textContent='';this.get('archive-reload').hidden=true;return true;
-    }catch(error){if(this.current(epoch)){this.get('archive-status').textContent=error.message;this.get('archive-reload').hidden=false;}return false;}
+      this.get('archive-status').textContent=this.museumLoadNotice;this.museumLoadNotice='';this.get('archive-reload').hidden=true;return true;
+    }catch(error){if(this.current(epoch)){this.museumLoadNotice='';this.get('archive-status').textContent=error.message;this.get('archive-reload').hidden=false;}return false;}
     finally{this.finish();}
   }
   async search(){return this.load({offset:0,query:this.get('archive-search').value});}
@@ -346,6 +439,7 @@ export class ArchivePanel {
       label.textContent=(typeof entry.collection_label==='string'?entry.collection_label.slice(0,80):'')||(entryKind(entry)==='nga'?'National Gallery of Art':'Imported collection');container.append(label);
       const details=this.document.createElement('p');details.className='hint small archive-metadata';
       details.textContent=['artist','date','medium'].map(key=>metadata(entry.metadata)[key]).filter(Boolean).join(' · ');if(details.textContent)container.append(details);
+      const rights=metadata(entry.metadata).rights;if(rights){const notice=this.document.createElement('p');notice.className='hint small archive-rights';notice.textContent=rights;container.append(notice);}
       const source=publicArchiveURL(entry.source_url);if(source){const links=this.document.createElement('div');links.className='archive-links';this.link(links,'Original source',source);container.append(links);}return;
     }
     const source=archiveSourceURL(entry.source_url);
@@ -358,7 +452,7 @@ export class ArchivePanel {
     container.append(links);
   }
   image(container,entry,className='archive-thumbnail'){
-    const url=publicArchiveURL(entry.image_url);if(!url)return false;
+    const url=displayArchiveImageURL(entry.image_url);if(!url)return false;
     const frame=this.document.createElement('div'),image=this.document.createElement('img'),fallback=this.document.createElement('span');
     frame.className=className;image.src=url;image.alt=typeof entry.image_alt==='string'&&entry.image_alt?entry.image_alt.slice(0,300):String(entry.title||'Archive artwork').slice(0,120);
     image.loading='lazy';image.decoding='async';image.referrerPolicy='no-referrer';fallback.textContent='Image unavailable';fallback.hidden=true;
@@ -370,7 +464,8 @@ export class ArchivePanel {
       const card=this.document.createElement('article'),title=this.document.createElement('h3'),caption=this.document.createElement('p');
       card.className='archive-artwork';this.image(card,entry,'archive-artwork-image');title.textContent=typeof entry.title==='string'?entry.title.slice(0,120):'Archive artwork';
       caption.textContent=['artist','date','medium'].map(key=>metadata(entry.metadata)[key]).filter(Boolean).join(' · ');card.append(title,caption);
-      const source=publicArchiveURL(entry.source_url);if(source)this.link(card,'View original source',source);list.append(card);
+      const source=publicArchiveURL(entry.source_url);if(source)this.link(card,'View original source',source);
+      const rights=metadata(entry.metadata).rights;if(rights){const notice=this.document.createElement('p');notice.className='archive-rights';notice.textContent=rights;card.append(notice);}list.append(card);
     }
     this.get('archive-artworks').hidden=!list.children.length;
   }

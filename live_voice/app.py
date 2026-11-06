@@ -31,6 +31,9 @@ from .archive_database import ArchiveDatabase, MAX_IMPORT_BYTES, MAX_DATABASE_EN
 from .archive_source import QueeringTheMap, ArchiveSourceUnavailable, qtm_entry_id
 from .collections import CollectionDatabase
 from .collection_catalog import CollectionCatalog
+from .museum_common import GUIDE_URL, MUSEUM_SOURCES, SOURCES, MuseumImportError, validate_import_input
+from .museum_import import MuseumImporter, museum_error
+from .museum_images import MuseumImages, MuseumImageUnavailable
 from .listening import ListeningClient, ListeningSession, ListeningError
 from .listening_config import EXPERIMENT, listening_mode, listening_profile
 
@@ -68,7 +71,7 @@ async def _archive_job(callback, *args, dispose=None, **kwargs):
 
 
 def create_app(preview=False, providers=None, vad_factory=None, archive_store=None, archive_importer=None, listening_client=None,
-               collections_store=None):
+               collections_store=None, museum_importer=None, museum_images=None):
     input_mode = listening_mode()
     deployment = listening_profile(profile(),input_mode)
     experimental = (listening_client or ListeningClient(os.environ.get('LIVE_LISTENING_URL','http://127.0.0.1:18095'))) if input_mode == EXPERIMENT else None
@@ -92,6 +95,8 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
     owns_collections_store = collections_store is None
     collections_store = collections_store or CollectionDatabase(archive_directory)
     collection_catalog = CollectionCatalog(archive_store, collections_store)
+    museum_importer = museum_importer or MuseumImporter()
+    museum_images = museum_images or MuseumImages()
     archive_importer = archive_importer or QueeringTheMap()
     archive_write_lock = asyncio.Lock()
 
@@ -103,6 +108,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         downloads.clear()
         await services.close()
         if experimental is not None: await experimental.close()
+        await museum_images.close()
         if owns_archive_store: await asyncio.to_thread(archive_store.close)
         if owns_collections_store: await asyncio.to_thread(collections_store.close)
 
@@ -155,6 +161,48 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         try: return {'collections':collection_catalog.list_collections()}
         except (OSError, ValueError, sqlite3.Error):
             raise HTTPException(status_code=503,detail='The saved collections could not be read.') from None
+
+    @app.get('/api/archive/museums')
+    def museum_sources():
+        return {'sources':[source.public() for source in MUSEUM_SOURCES], 'guide_url':GUIDE_URL,
+                'import_scope':'artist_or_subject_search', 'maximum_results':200}
+
+    @app.post('/api/archive/museums/import')
+    async def import_museum_collection(request: Request):
+        require_archive_origin(request)
+        if request.headers.get('content-type','').split(';',1)[0].strip().lower()!='application/json':
+            raise HTTPException(status_code=400,detail='Choose a museum and an artist or subject.')
+        raw = bytearray()
+        async for part in request.stream():
+            if len(raw)+len(part)>2048:
+                raise HTTPException(status_code=413,detail='Use a short museum import request.')
+            raw.extend(part)
+        try:
+            values = json.loads(raw)
+            if not isinstance(values,dict) or set(values)-{'source','query','limit'}: raise ValueError()
+            source, query, limit = values.get('source'), values.get('query'), values.get('limit',25)
+            if not isinstance(source,str) or source not in SOURCES or type(limit) is not int or limit>200: raise ValueError()
+            query, limit = validate_import_input(source,query,limit)
+        except (ValueError,TypeError,UnicodeError):
+            raise HTTPException(status_code=400,detail='Choose a museum, an artist or subject up to 200 characters, and 1–200 artworks.') from None
+        async with archive_write_lock:
+            if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before importing a museum collection.')
+            try:
+                result = await _archive_job(museum_importer.import_collection,collections_store,source,query,limit)
+                return {'results':[result], 'errors':[]}
+            except MuseumImportError as error:
+                return {'results':[], 'errors':[museum_error(error,source)]}
+            except (OSError,sqlite3.Error):
+                return {'results':[], 'errors':[museum_error(MuseumImportError(source,'storage_error'),source)]}
+
+    @app.get('/api/archive/museum-images/aic/{identifier}')
+    async def chicago_thumbnail(identifier: str):
+        try: data = await museum_images.fetch(collections_store,identifier)
+        except MuseumImageUnavailable:
+            raise HTTPException(status_code=404,detail='This artwork thumbnail is unavailable. Open its museum source link.') from None
+        except (OSError,sqlite3.Error):
+            raise HTTPException(status_code=503,detail='The artwork thumbnail could not be read.') from None
+        return Response(data,media_type='image/jpeg',headers={'X-Content-Type-Options':'nosniff'})
 
     @app.get('/api/archive/collections/entries')
     def collection_entries(ids: str = Query('',max_length=520), q: str = Query('',max_length=200),

@@ -381,6 +381,14 @@ class CollectionDatabase:
     def count(self):
         with self._lock: return self._connection.execute('SELECT count(*) FROM collection_entries').fetchone()[0]
 
+    def has_source_image(self, collection_id, source_kind, image_url):
+        """Only registered official imports may use the fixed museum image relay."""
+        with self._lock:
+            return bool(self._connection.execute(
+                'SELECT EXISTS(SELECT 1 FROM collection_entries e JOIN collections c ON c.id=e.collection_id '
+                'WHERE e.collection_id=? AND c.source_kind=? AND e.image_url=?)',
+                (collection_id,source_kind,image_url)).fetchone()[0])
+
     def page(self, collection_ids, query='', offset=0, limit=25):
         ids = _validated_collection_ids(collection_ids)
         if type(offset) is not int or not 0 <= offset <= 2**63 - 1:

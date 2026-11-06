@@ -51,6 +51,8 @@ For local copies, use `--objects PATH --images PATH --archive-dir PATH`. `source
 
 ## Add another collection
 
+For museum catalogues from the Navigating.art guide, choose **+ Add museum collection** and import an artist/title/subject selection directly from the Met, Chicago, Cleveland, Rijksmuseum or Getty. These are bounded topic selections alongside NGA, not a full copy of each museum. [Museum source setup, images and limits](MUSEUM_COLLECTIONS.md).
+
 Choose **+ Add collection**, enter a name and upload JSON, JSONL or CSV up to 128 MiB. A bad row rolls back the complete import. Imported collections are read-only in this initial UI. Active calls prevent imports and source changes.
 
 Required record fields: `title`, `text`, `source_url` (public HTTPS). Optional: `id` (32 lowercase hex characters), `source_entry_id`, `image_url`, `image_alt`, `metadata`. Omit `collection_id`: the new collection supplies its namespace. Importing an image URL does not establish its rights; supply material you can display. Storing these URLs does not fetch arbitrary remote content on the server.
