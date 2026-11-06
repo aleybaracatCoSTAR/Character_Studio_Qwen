@@ -425,32 +425,36 @@ class CollectionDatabase:
                 'WHERE e.collection_id=? AND c.source_kind=? AND e.image_url=?)',
                 (collection_id,source_kind,image_url)).fetchone()[0])
 
-    def page(self, collection_ids, query='', offset=0, limit=25):
+    def page(self, collection_ids, query='', offset=0, limit=25, *, literal=False):
         ids = _validated_collection_ids(collection_ids)
         if type(offset) is not int or not 0 <= offset <= 2**63 - 1:
             raise ValueError('Use a nonnegative collection page offset.')
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
             raise ValueError('Use a collection page size between one and 100.')
-        _, expression = _fts_query(query)
+        if type(literal) is not bool: raise ValueError('Choose a valid collection search mode.')
+        terms, expression = _fts_query(query)
         with self._lock:
             connection = self._connection
             self._require_collections(connection, ids)
             total = connection.execute(
                 f'SELECT count(*) FROM collection_entries WHERE collection_id IN ({_where(ids)})', ids).fetchone()[0]
             if expression:
-                version = connection.execute('PRAGMA data_version').fetchone()[0]
-                if self._retrieval_index is None or self._retrieval_version != version:
-                    self._retrieval_index = _artwork_index(connection)
-                    self._retrieval_version = version
-                terms, _ = _fts_query(query)
-                ranked = self._retrieval_index.ranked(connection, ids, query, terms)
-                if ranked is not None:
-                    wanted = ranked[offset:offset+limit]
-                    rows = connection.execute(f'SELECT rowid,* FROM collection_entries WHERE rowid IN ({_where(wanted)})', wanted).fetchall() if wanted else []
-                    order = {rowid:position for position,rowid in enumerate(wanted)}
-                    rows.sort(key=lambda row:order[row['rowid']])
-                    return {'entries':[_record(row) for row in rows], 'total':total, 'matched':len(ranked),
-                            'offset':offset, 'limit':limit}
+                # Manual gallery search can use the on-disk FTS immediately.
+                # Do not rebuild the all-catalogue fuzzy index for this path,
+                # especially while a bulk importer keeps invalidating it.
+                if not literal:
+                    version = connection.execute('PRAGMA data_version').fetchone()[0]
+                    if self._retrieval_index is None or self._retrieval_version != version:
+                        self._retrieval_index = _artwork_index(connection)
+                        self._retrieval_version = version
+                    ranked = self._retrieval_index.ranked(connection, ids, query, terms)
+                    if ranked is not None:
+                        wanted = ranked[offset:offset+limit]
+                        rows = connection.execute(f'SELECT rowid,* FROM collection_entries WHERE rowid IN ({_where(wanted)})', wanted).fetchall() if wanted else []
+                        order = {rowid:position for position,rowid in enumerate(wanted)}
+                        rows.sort(key=lambda row:order[row['rowid']])
+                        return {'entries':[_record(row) for row in rows], 'total':total, 'matched':len(ranked),
+                                'offset':offset, 'limit':limit}
                 expression = _fallback_expression(query, terms, expression)
                 clause = f'WHERE collection_fts MATCH ? AND e.collection_id IN ({_where(ids)})'
                 matched = connection.execute('SELECT count(*) FROM collection_fts JOIN collection_entries e '

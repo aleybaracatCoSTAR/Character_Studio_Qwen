@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import time
+from typing import Literal
 from urllib.parse import unquote
 
 from anyio import CancelScope
@@ -150,6 +151,9 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
     @app.get('/archive/')
     def archive_index(): return FileResponse(public / 'live.html')
 
+    @app.get('/archive/gallery/')
+    def archive_gallery(): return FileResponse(public / 'live.html')
+
     def require_archive_origin(request):
         if request.headers.get('origin') != str(request.base_url).rstrip('/'):
             raise HTTPException(status_code=403,detail='Open the studio in its own browser tab.')
@@ -246,8 +250,10 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
 
     @app.get('/api/archive/collections/entries')
     def collection_entries(ids: str = Query('',max_length=520), q: str = Query('',max_length=200),
-                           offset: int = Query(0,ge=0), limit: int = Query(25,ge=1,le=50)):
-        try: return collection_catalog.page(ids.split(',') if ids else [], query=q, offset=offset, limit=limit)
+                           offset: int = Query(0,ge=0), limit: int = Query(25,ge=1,le=50),
+                           search_mode: Literal['smart','literal'] = 'smart'):
+        try: return collection_catalog.page(ids.split(',') if ids else [], query=q, offset=offset, limit=limit,
+                                           literal=search_mode=='literal')
         except KeyError:
             raise HTTPException(status_code=404,detail='A selected collection is no longer available.') from None
         except (ValueError, TypeError):

@@ -12,8 +12,10 @@ import {ListeningFeedback} from './live-listening.mjs';
 import {VoiceProgress} from './live-voice-progress.mjs';
 import {BargeInController} from './live-barge-in.mjs';
 import {EngineComparison} from './live-comparison.mjs';
+import {ArchiveGallery} from './live-gallery.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const archivePage=location.pathname.startsWith('/archive');
+const galleryPage=location.pathname.startsWith('/archive/gallery');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
 let socket=null,context=null,stream=null,capture=null,playback=null,connecting=false,muted=false,ready=false,currentTurn=0;
 let replyPending=false,resumeTimer=null;
@@ -31,6 +33,10 @@ const inspector=new PromptInspector({document,send});
 const archivePanel=new ArchivePanel({document,onChange:()=>saveActiveProfile()});
 const artworkChat=new ArtworkChat({document,container:$('messages'),empty:$('empty-state'),
   onImageStatus:value=>{if(imageStatusSupported&&socket?.readyState===WebSocket.OPEN)send(value);}});
+const gallery=galleryPage?new ArchiveGallery({document,
+  collections:()=>archivePanel.collectionIds.length?archivePanel.collectionIds.filter(id=>id!=='qtm')
+    :archivePanel.collections.filter(item=>item.id!=='qtm'&&item.count>0).map(item=>item.id),
+  onImageStatus:value=>{if(imageStatusSupported&&socket?.readyState===WebSocket.OPEN)send(value);}}):null;
 const comparison=new EngineComparison({document,onChange:()=>{feedback();updateEngineVoice();void status();}});
 const listeningFeedback=new ListeningFeedback({label:$('listening-mode'),partial:$('listening-partial'),
   onFinalizing:()=>{holdMicrophone();state('Finishing recognition… · Mic paused');},
@@ -138,7 +144,7 @@ function applyProfile(profile){
     clearReference();updateVoicePreset();
     $('chat-title').textContent=`Talk to ${profile.character.name.trim()||'your character'}`;
     clearTimeout(resumeTimer);replyPending=false;currentTurn=0;triggerActive=false;
-    playback?.clear();bargeIn.reset();conversation.reset();artworkChat.reset();inspector.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();
+    playback?.clear();bargeIn.reset();conversation.reset();artworkChat.reset();gallery?.reset();inspector.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();
     if($('model-inspector').open)$('model-inspector').close();
     $('director-latest').hidden=true;$('director-note').textContent='';$('timing').textContent='';
     $('typed-form').hidden=true;$('typed-message').value='';$('trigger-state').textContent='Start a call to test the reaction.';
@@ -235,6 +241,7 @@ async function disconnect(){
   inspector.setConnected(false);
   archivePanel.resetSources();
   artworkChat.disconnect();
+  gallery?.disconnect();
   imageStatusSupported=false;
   streamingSpeech=false;streamingAudioQueued=false;comparison.endCall();
   listeningFeedback.reset();
@@ -262,7 +269,7 @@ function event(data){
   comparison.accept(data);
   if(data.type==='listening_state'||data.type==='listening_partial'){listeningFeedback.accept(data);return;}
   if(data.type==='model_inspection'){inspector.accept(data);return;}
-  if(data.type==='archive_sources'){if(archivePanel.showSources(data))artworkChat.accept(data,archivePanel.sourceMatches);return;}
+  if(data.type==='archive_sources'){if(archivePanel.showSources(data)){if(gallery)gallery.accept(data,archivePanel.sourceMatches);else artworkChat.accept(data,archivePanel.sourceMatches);}return;}
   if(data.type==='story_state'){renderStory(data);return;}
   if(data.type==='story_decision'){$('story-reason').textContent=`Director held this beat: ${data.reason}`;return;}
   if(data.type==='director_ack'){feedback(data.message);return;}
@@ -284,7 +291,7 @@ function event(data){
     streamingSpeech=data.streaming_speech===true;listeningFeedback.setMode(data.listening_mode);sessionReady=true;imageStatusSupported=data.image_status===true;interruptionsPermitted=data.interruptions===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
-  if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;streamingAudioQueued=false;bargeIn.begin(data.turn_id);listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);artworkChat.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
+  if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;streamingAudioQueued=false;bargeIn.begin(data.turn_id);listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);artworkChat.setTurn(currentTurn);gallery?.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
   if(data.type==='interrupted'){
     if(data.turn_id===currentTurn){voiceProgress.finish(currentTurn);voiceRetry.clear();playback.clear();if(!bargeIn.isSuppressed(data.turn_id))resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
     return;
@@ -323,7 +330,7 @@ async function connect(useMic=true){
   }
   connecting=true;feedback();controls();
   try{
-    conversation.reset();artworkChat.reset();bargeIn.reset();interruptionsPermitted=false;inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
+    conversation.reset();artworkChat.reset();gallery?.disconnect();bargeIn.reset();interruptionsPermitted=false;inspector.reset();archivePanel.resetSources();listeningFeedback.reset();voiceRetry.clear();voiceProgress.clear();directorPanel.resetNote();currentTurn=0;$('timing').textContent='';$('director-latest').hidden=true;
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}
@@ -466,8 +473,8 @@ async function status(){
 }
 async function init(){
   if(archivePage){
-    document.title='Character Studio · Character + archive';
-    document.querySelector('.brand span').textContent='Character + archive';
+    document.title=gallery?'Character Studio · Archive gallery':'Character Studio · Character + archive';
+    const brand=document.querySelector('.brand span');if(brand)brand.textContent='Character + archive';
     document.querySelector('.eyebrow').textContent='ARCHIVE CONVERSATION';
   }
   let saved;try{saved=JSON.parse(localStorage.getItem('live-character-v1')||localStorage.getItem('qwen-character-v1'));}catch(error){}
@@ -505,7 +512,8 @@ async function init(){
   await archivePanel.loadCollections();
   await archivePanel.load();
   await loadCharacterLibrary();
+  if(gallery)void gallery.search();
   await status();setInterval(status,5000);
 }
-window.addEventListener('beforeunload',()=>{if(stream)stream.getTracks().forEach(track=>track.stop());if(referenceURL)URL.revokeObjectURL(referenceURL);socket?.close();});
+window.addEventListener('beforeunload',()=>{gallery?.destroy();if(stream)stream.getTracks().forEach(track=>track.stop());if(referenceURL)URL.revokeObjectURL(referenceURL);socket?.close();});
 controls();void init().catch(()=>feedback('Could not load the character. Check the server and refresh.'));

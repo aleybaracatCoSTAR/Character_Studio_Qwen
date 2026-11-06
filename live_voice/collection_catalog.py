@@ -52,9 +52,9 @@ class CollectionCatalog:
         if any(value not in known for value in ids): raise KeyError('Unknown collection.')
         return ids
 
-    def _page(self, collection_id, query, offset, limit):
+    def _page(self, collection_id, query, offset, limit, *, literal=False):
         if collection_id != 'qtm':
-            page = self.collections.page([collection_id], query=query, offset=offset, limit=limit)
+            page = self.collections.page([collection_id], query=query, offset=offset, limit=limit, literal=literal)
             source = next(value for value in self.collections.list_collections() if value['id']==collection_id)
             return {**page, 'entries':[{**entry, 'collection_label':source['label'],
                                        'source_kind':source['source_kind']} for entry in page['entries']]}
@@ -67,12 +67,12 @@ class CollectionCatalog:
         return {'entries':matching[offset:offset+limit], 'total':len(entries),
                 'matched':len(matching), 'offset':offset, 'limit':limit}
 
-    def page(self, collection_ids, query='', offset=0, limit=25):
+    def page(self, collection_ids, query='', offset=0, limit=25, *, literal=False):
         ids = self.validate(collection_ids)
         if (not isinstance(query, str) or len(query)>200 or type(offset) is not int or offset<0
-                or type(limit) is not int or not 1<=limit<=50):
+                or type(limit) is not int or not 1<=limit<=50 or type(literal) is not bool):
             raise ValueError('Choose a short search and valid page.')
-        summaries = [(value, self._page(value, query, 0, 1)) for value in ids]
+        summaries = [(value, self._page(value, query, 0, 1, literal=literal)) for value in ids]
         total = sum(page['total'] for _, page in summaries)
         matched = sum(page['matched'] for _, page in summaries)
         remaining, skip, entries = limit, offset, []
@@ -80,7 +80,7 @@ class CollectionCatalog:
             if skip >= summary['matched']:
                 skip -= summary['matched']
                 continue
-            page = self._page(value, query, skip, remaining)
+            page = self._page(value, query, skip, remaining, literal=literal)
             entries.extend(page['entries'])
             remaining -= len(page['entries'])
             skip = 0
