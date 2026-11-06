@@ -1,5 +1,7 @@
 # Character Studio · Qwen
 
+**Direct Drama 3 latency test:** run one warmup and five measured voice requests, with a fixed reference, playable WAVs and a JSON report. It bypasses the conversation's recognition/director/actor and complete-take word checks without changing that pipeline. [Run and interpret the benchmark](docs/DRAMA3_LATENCY.md).
+
 **Archive gallery:** open **Gallery view** at `/archive/gallery/` for a centred artwork, a thumbnail trail and a compact character conversation. Retrieved artworks reveal from mosaic blocks to a clear image; museum details and source links remain beside the chat. The existing `/archive/` view stays available and shares the same saved archive characters. [Gallery controls and behaviour](docs/ARCHIVE_GALLERY.md).
 
 [Gallery with artwork details beside the image](docs/screenshots/archive-gallery-side-details.jpg) · [Framed pixel reveal in progress](docs/screenshots/archive-gallery-reveal.jpg). Visitors can enter their name or say “My name is…” for a personalised greeting.

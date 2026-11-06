@@ -6,6 +6,8 @@ Built with Fish Audio. Read the [model card](https://huggingface.co/fishaudio/dr
 
 ## What we are testing
 
+For a repeated warmed timing test with a fixed Female/Male reference and a median report, see [the direct latency benchmark](../../docs/DRAMA3_LATENCY.md): `python3 experiments/drama3/benchmark_latency.py --voice female --warmup 1 --runs 5`. It measures PCM arrival rather than physical speaker onset and does not verify spoken-word completeness.
+
 Three short original Anna lines: a calm introduction, frustration and hope. The client requests raw streamed PCM, writes playable WAVs, and measures arrival of the first audio bytes, total completion time and audio duration. First audio received is not the same as first audio heard. Optional `--play` sends arriving PCM to an existing local `ffplay` installation. Otherwise, listen afterwards in the generated `listen.html`.
 
 This tests voice and delivery, not character reasoning. Without a reference, voice identity is not guaranteed across requests. To compare deliveries in a consistent voice, supply a short reference WAV with its exact transcript using `--ref-audio` and `--ref-text`. Those files go to your own model server, not Fish Audio's hosted API.
