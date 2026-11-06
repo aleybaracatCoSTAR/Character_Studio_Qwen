@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import sqlite3
 import threading
+import tempfile
 from typing import Literal
 from urllib.parse import urlsplit
 import uuid
@@ -28,7 +29,7 @@ DATABASE_NAME = 'collections.sqlite3'
 NGA_COLLECTION_ID = 'national-gallery-of-art'
 NGA_SOURCE_URL = 'https://github.com/NationalGalleryOfArt/opendata'
 MAX_COLLECTIONS_PER_CALL = 8
-MAX_DATABASE_ENTRIES = 500_000
+MAX_DATABASE_ENTRIES = 5_000_000
 MAX_IMPORT_BYTES = 128 * 1024 * 1024
 MAX_IMPORT_LINE_BYTES = 256 * 1024
 MAX_PAGE_SIZE = 100
@@ -290,11 +291,12 @@ def _matches(connection, ids, query, history=(), index=None):
 
 
 class CollectionSnapshot:
-    """A call-owned, frozen in-memory copy; only selected collection IDs are searched."""
+    """A call-owned frozen disk copy; full museum catalogues do not fill RAM."""
     def __init__(self, path, ids):
         self.ids = _validated_collection_ids(ids)
         self._lock = threading.RLock()
-        self._connection = sqlite3.connect(':memory:', timeout=30, check_same_thread=False)
+        self._temporary = tempfile.TemporaryDirectory(prefix='character-collections-')
+        self._connection = sqlite3.connect(Path(self._temporary.name)/'snapshot.sqlite3', timeout=30, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         try:
             source = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', timeout=30, uri=True)
@@ -310,6 +312,7 @@ class CollectionSnapshot:
             self._connection.execute('PRAGMA query_only=ON')
         except Exception:
             self._connection.close()
+            self._temporary.cleanup()
             raise
 
     def search(self, query, history=()):
@@ -323,6 +326,7 @@ class CollectionSnapshot:
                 self._connection.close()
                 self._connection = None
                 self._retrieval_index = None
+                self._temporary.cleanup()
 
 
 class CollectionDatabase:
@@ -469,15 +473,17 @@ class CollectionDatabase:
             self._require_collections(self._connection, ids)
             return CollectionSnapshot(self.path, ids)
 
-    def import_records(self, records, *, collection_id, label, source_kind='custom', source_url=''):
+    def import_records(self, records, *, collection_id, label, source_kind='custom', source_url='', update_existing=False):
         id, label, source_kind, source_url = self._collection_values(collection_id, label, source_kind, source_url)
+        if type(update_existing) is not bool or update_existing and not source_kind.startswith('museum-'):
+            raise ValueError('Only a registered museum import may refresh its records.')
         if isinstance(records, (str, bytes, dict)): raise ValueError('Import an iterable of record objects.')
         try: records = iter(records)
         except TypeError: raise ValueError('Import an iterable of record objects.') from None
         with self._lock:
             connection = self._connection
             connection.execute('BEGIN IMMEDIATE')
-            added = duplicates = 0
+            added = duplicates = updated = 0
             try:
                 existing = connection.execute('SELECT * FROM collections WHERE id=?', (id,)).fetchone()
                 if existing is not None and existing['source_kind'] != source_kind:
@@ -495,12 +501,35 @@ class CollectionDatabase:
                         values['provenance'] = 'imported'
                         entry = CollectionEntry.model_validate(values)
                         saved = entry.model_dump()
+                        same_id = connection.execute(
+                            'SELECT rowid,* FROM collection_entries WHERE collection_id=? AND id=?', (id, entry.id)).fetchone()
+                        # The Met bulk CSV omits image URLs. Refreshing its catalogue
+                        # must retain an eligible image already obtained from its API.
+                        omitted_public_met_image = saved['metadata'].get('rights') == (
+                            'Catalogue metadata: CC0. The CSV contains no image URLs; '
+                            'image availability is checked on request. Source public-domain flag: True.')
+                        if (update_existing and same_id is not None and source_kind == 'museum-met'
+                                and not saved['image_url'] and omitted_public_met_image):
+                            saved['image_url'] = same_id['image_url']
+                            if same_id['image_url']:
+                                saved['image_alt'] = same_id['image_alt']
+                                old_metadata = json.loads(same_id['metadata'])
+                                if old_metadata.get('rights'): saved['metadata']['rights'] = old_metadata['rights']
                         fingerprint = json.dumps({key:value for key,value in saved.items() if key not in ('id', 'provenance')},
                             sort_keys=True, ensure_ascii=False, separators=(',', ':'))
                         digest = hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()
-                        same_id = connection.execute(
-                            'SELECT content_hash FROM collection_entries WHERE collection_id=? AND id=?', (id, entry.id)).fetchone()
-                        if same_id is not None and same_id['content_hash'] != digest: raise ValueError()
+                        if same_id is not None and same_id['content_hash'] != digest:
+                            if not update_existing: raise ValueError()
+                            connection.execute('DELETE FROM collection_fts WHERE rowid=?', (same_id['rowid'],))
+                            connection.execute('UPDATE collection_entries SET '+','.join(key+'=?' for key in _RECORD_COLUMNS)+
+                                ',content_hash=? WHERE rowid=?',
+                                (*[json.dumps(saved[key], ensure_ascii=False, sort_keys=True) if key == 'metadata' else saved[key]
+                                   for key in _RECORD_COLUMNS],digest,same_id['rowid']))
+                            connection.execute('INSERT INTO collection_fts(rowid,title_terms,body_terms,metadata_terms) VALUES(?,?,?,?)',
+                                (same_id['rowid'],' '.join(_terms(saved['title'])),' '.join(_terms(saved['text'])),
+                                 ' '.join(_terms(' '.join(saved['metadata'].values())))))
+                            updated += 1
+                            continue
                         duplicate = connection.execute(
                             'SELECT content_hash FROM collection_entries WHERE collection_id=? AND content_hash=?', (id, digest)).fetchone()
                         if duplicate is not None:
@@ -521,8 +550,9 @@ class CollectionDatabase:
                 count = connection.execute('SELECT count(*) FROM collection_entries WHERE collection_id=?', (id,)).fetchone()[0]
                 images = connection.execute('SELECT EXISTS(SELECT 1 FROM collection_entries WHERE collection_id=? AND image_url IS NOT NULL)', (id,)).fetchone()[0]
                 connection.commit()
-                if added: self._retrieval_index = None
+                if added or updated: self._retrieval_index = None
                 return {'added':added, 'duplicates':duplicates, 'total':count,
+                        **({'updated':updated} if update_existing else {}),
                         'collection':{'id':id, 'label':label, 'source_kind':source_kind, 'source_url':source_url,
                                       'count':count, 'has_images':bool(images)}}
             except BaseException:

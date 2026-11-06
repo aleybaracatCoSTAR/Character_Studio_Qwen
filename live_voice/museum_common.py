@@ -40,6 +40,8 @@ MUSEUM_SOURCES = (
                  'https://www.getty.edu/', 'https://data.getty.edu/museum/collection/'),
 )
 SOURCES = {source.id:source for source in MUSEUM_SOURCES}
+# Bulk files and the smaller paged catalogue finish before the longer OAI harvest.
+FULL_MUSEUM_ORDER = ('met','aic','cleveland','getty','rijksmuseum')
 
 
 class MuseumImportError(ValueError):

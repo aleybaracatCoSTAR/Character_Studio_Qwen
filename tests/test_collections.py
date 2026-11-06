@@ -205,7 +205,9 @@ class CollectionDatabaseTests(unittest.TestCase):
         self.assertEqual(old.search('telescope'), [])
         self.assertEqual(fresh.search('telescope')[0]['source_entry_id'], '2')
         self.assertEqual(old._connection.execute('PRAGMA query_only').fetchone()[0], 1)
-        self.assertEqual(old._connection.execute('PRAGMA database_list').fetchone()[2], '')
+        frozen_path = old._connection.execute('PRAGMA database_list').fetchone()[2]
+        self.assertTrue(Path(frozen_path).is_file())
+        self.assertNotEqual(Path(frozen_path), self.store.path)
         with ThreadPoolExecutor(max_workers=3) as pool:
             result = list(pool.map(old.search, ['garden', 'telescope', 'garden']))
         self.assertEqual([len(items) for items in result], [1, 0, 1])

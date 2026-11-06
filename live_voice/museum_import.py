@@ -68,12 +68,13 @@ def _invalid_constant(value): raise ValueError('Use standard JSON values.')
 
 class MuseumHTTP:
     """A single-source read-only client; allowlisted URLs, no redirects, bounded JSON."""
-    def __init__(self, provider, *, client=None, clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, provider, *, client=None, clock=time.monotonic, sleep=time.sleep, check_stop=None):
         if provider not in SOURCES: raise MuseumImportError(provider,'invalid_input')
         self.provider = provider
         self.client = client or httpx.Client(timeout=httpx.Timeout(30,connect=10),follow_redirects=False,trust_env=False)
         self.owned = client is None
         self.clock, self.sleep = clock, sleep
+        self.check_stop = check_stop or (lambda:None)
         self.started, self.last_request, self.requests = clock(), None, 0
         self.bytes = 0
 
@@ -97,6 +98,7 @@ class MuseumHTTP:
                 raise MuseumImportError(self.provider,'invalid_input')
             selected_headers.update(headers)
         for attempt in range(3):
+            self.check_stop()
             if self.requests>=MAX_REQUESTS: raise MuseumImportError(self.provider,'request_limit')
             if self.clock()-self.started>=MAX_IMPORT_SECONDS: raise MuseumImportError(self.provider,'timeout')
             interval = 1.05 if self.provider=='aic' else 0.2
@@ -119,6 +121,7 @@ class MuseumHTTP:
                         raise MuseumImportError(self.provider,'invalid_response')
                     raw = bytearray()
                     for part in response.iter_bytes():
+                        self.check_stop()
                         if self.clock()-self.started>=MAX_IMPORT_SECONDS:
                             raise MuseumImportError(self.provider,'timeout')
                         if len(raw)+len(part)>MAX_RESPONSE_BYTES or self.bytes+len(part)>MAX_TOTAL_BYTES:
@@ -129,8 +132,10 @@ class MuseumHTTP:
                     if not isinstance(value,dict): raise MuseumImportError(self.provider,'invalid_response')
                     return value
             except httpx.TimeoutException:
+                self.check_stop()
                 if attempt==2: raise MuseumImportError(self.provider,'timeout') from None
             except (httpx.HTTPError,ValueError,UnicodeError,RecursionError) as error:
+                self.check_stop()
                 if isinstance(error,MuseumImportError): raise
                 raise MuseumImportError(self.provider,'invalid_response' if isinstance(error,(ValueError,UnicodeError,RecursionError)) else 'unavailable') from None
         raise MuseumImportError(self.provider,'unavailable')

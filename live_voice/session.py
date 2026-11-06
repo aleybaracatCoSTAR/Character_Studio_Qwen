@@ -42,7 +42,7 @@ def recognition_timings(values):
 
 class LiveSession:
     def __init__(self, providers, character, send_json, send_bytes, voice=None, trigger=None, director=None, narrative=None, clock=time.monotonic,
-                 archive=None, archive_entries=(), archive_search=None):
+                 archive=None, archive_entries=(), archive_search=None, image_lookup=None):
         self.providers = providers
         self.character = character
         self.send_json = send_json
@@ -80,6 +80,7 @@ class LiveSession:
         self.archive = archive if archive and archive.enabled else None
         self.archive_entries = tuple(archive_entries) if self.archive else ()
         self.archive_search = archive_search if self.archive else None
+        self.image_lookup = image_lookup
         self.last_archive_context = None
         self.last_archive_matches = []
         self.pending_image_offer = []
@@ -363,6 +364,8 @@ class LiveSession:
                     matches = (copy.deepcopy(previous_matches) if reuse
                                else retrieve(self.archive_entries, search_text, search_history))
                     count = len(self.archive_entries)
+                if self.image_lookup is not None and self.archive.collection_ids:
+                    matches = await self.image_lookup.resolve(matches)
                 archive_context = (collection_grounding_messages(matches) if self.archive.collection_ids
                                    else grounding_messages(matches, scope=scope))
                 if self.archive.collection_ids:

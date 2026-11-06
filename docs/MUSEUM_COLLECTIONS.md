@@ -1,5 +1,7 @@
 # More art collections for Robin
 
+For a whole museum rather than a topic selection, use **Entire published collection** in the same dialog. Background imports have Stop/Resume and shared local checkpoints. See [full collection setup and coverage](FULL_MUSEUM_IMPORTS.md). The limits and single-transaction behavior below describe the smaller **Matching artworks** mode.
+
 The [Navigating.art article](https://www.navigating.art/education/open-access-2026) is a guide to five museum data services, not a downloadable archive of its own. The portal now imports selections directly from those official services, alongside the existing National Gallery of Art index.
 
 ## In the portal
@@ -41,7 +43,7 @@ export LIVE_VOICE_STORE="/scratch4weeks/$USER/live-voice-store"
 
 `--source` accepts `met`, `aic`, `cleveland`, `rijksmuseum`, `getty`, or `all`. The CLI limit is 1–1,000 **per museum**, default 100. Queries must be 1–200 plain-text characters. `all` runs museums sequentially and reports each result separately; a failing museum does not undo previously successful museums. Re-running the same unchanged records counts duplicates. A changed record with the same stable ID is reported as a storage conflict; existing saved content is preserved rather than silently overwritten.
 
-For whole-catalogue work, use the institution's official bulk exports where provided. This topic importer deliberately does not crawl millions of objects or bypass deep-pagination limits. The existing NGA [full snapshot importer](RAG_COLLECTIONS.md#import-the-gallery-data-on-surrey) remains available.
+Whole-catalogue work now has a separate [full importer](FULL_MUSEUM_IMPORTS.md), which uses official bulk files and efficient resumable harvest routes. This topic importer retains its smaller bounds. The existing NGA [full snapshot importer](RAG_COLLECTIONS.md#import-the-gallery-data-on-surrey) remains available.
 
 ## Storage, timing and provenance
 
@@ -51,7 +53,7 @@ Museum records use the existing `collections.sqlite3` in `$LIVE_ARCHIVE_DIR`, or
 /scratch4weeks/jq575gb/live-voice-store/archive/collections.sqlite3
 ```
 
-The five names are separate collections in that file; they do not modify the QTM file or the NGA collection. Only an explicit import sends the artist/subject query to the selected museum. Conversation transcripts, character sheets, director notes and participant speech are not sent to museum services. Each call freezes its selected local indexes. Museum requests are not inserted into the per-reply path.
+The five names are separate collections in that file; they do not modify the QTM file or the NGA collection. Matching imports send only the artist/subject query to the selected museum. Full imports send enumeration cursors instead. Each call freezes its selected local indexes. A retrieved Met/Getty record without an image can perform a bounded official object/media lookup using its source ID, since bulk metadata omits those image links. Conversation transcripts, character sheets, director notes and participant speech are not sent by these image lookups.
 
 Imports validate official hosts, identifiers and response sizes, limit requests and runtime, and back off on temporary failures. A museum operation fetches and normalizes its complete bounded selection before one SQLite transaction. Bad rows or conflicts roll back that museum's operation. Imports are blocked during an active call. A disconnected import request still owns its worker through completion before releasing the write lock.
 

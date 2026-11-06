@@ -11,7 +11,7 @@ from urllib.parse import unquote
 
 from anyio import CancelScope
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Query
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -33,6 +33,8 @@ from .collections import CollectionDatabase
 from .collection_catalog import CollectionCatalog
 from .museum_common import GUIDE_URL, MUSEUM_SOURCES, SOURCES, MuseumImportError, validate_import_input
 from .museum_import import MuseumImporter, museum_error
+from .museum_jobs import MuseumJobs
+from .museum_image_lookup import MuseumImageLookup
 from .museum_images import MuseumImages, MuseumImageUnavailable
 from .listening import ListeningClient, ListeningSession, ListeningError
 from .listening_config import EXPERIMENT, listening_mode, listening_profile
@@ -71,7 +73,7 @@ async def _archive_job(callback, *args, dispose=None, **kwargs):
 
 
 def create_app(preview=False, providers=None, vad_factory=None, archive_store=None, archive_importer=None, listening_client=None,
-               collections_store=None, museum_importer=None, museum_images=None):
+               collections_store=None, museum_importer=None, museum_images=None, museum_bulk_runner=None, museum_image_lookup=None):
     input_mode = listening_mode()
     deployment = listening_profile(profile(),input_mode)
     experimental = (listening_client or ListeningClient(os.environ.get('LIVE_LISTENING_URL','http://127.0.0.1:18095'))) if input_mode == EXPERIMENT else None
@@ -96,7 +98,9 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
     collections_store = collections_store or CollectionDatabase(archive_directory)
     collection_catalog = CollectionCatalog(archive_store, collections_store)
     museum_importer = museum_importer or MuseumImporter()
+    museum_jobs = MuseumJobs(collections_store, runner=museum_bulk_runner)
     museum_images = museum_images or MuseumImages()
+    museum_image_lookup = museum_image_lookup or MuseumImageLookup()
     archive_importer = archive_importer or QueeringTheMap()
     archive_write_lock = asyncio.Lock()
 
@@ -106,9 +110,11 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         yield
         if task and not task.done(): task.cancel()
         downloads.clear()
+        await asyncio.to_thread(museum_jobs.close)
         await services.close()
         if experimental is not None: await experimental.close()
         await museum_images.close()
+        await museum_image_lookup.close()
         if owns_archive_store: await asyncio.to_thread(archive_store.close)
         if owns_collections_store: await asyncio.to_thread(collections_store.close)
 
@@ -165,7 +171,19 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
     @app.get('/api/archive/museums')
     def museum_sources():
         return {'sources':[source.public() for source in MUSEUM_SOURCES], 'guide_url':GUIDE_URL,
-                'import_scope':'artist_or_subject_search', 'maximum_results':200}
+                'import_scope':'artist_or_subject_search', 'maximum_results':200,
+                'full_collection_import':True,'full_import_resumable':True}
+
+    @app.get('/api/archive/museums/imports/current')
+    def current_museum_import():
+        return {'job':museum_jobs.current()}
+
+    @app.post('/api/archive/museums/imports/{identity}/stop')
+    def stop_museum_import(identity: str, request: Request):
+        require_archive_origin(request)
+        try: return {'job':museum_jobs.stop(identity)}
+        except KeyError:
+            raise HTTPException(status_code=404,detail='This museum import is no longer current.') from None
 
     @app.post('/api/archive/museums/import')
     async def import_museum_collection(request: Request):
@@ -179,14 +197,26 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             raw.extend(part)
         try:
             values = json.loads(raw)
-            if not isinstance(values,dict) or set(values)-{'source','query','limit'}: raise ValueError()
+            if not isinstance(values,dict) or set(values)-{'source','query','limit','scope'}: raise ValueError()
             source, query, limit = values.get('source'), values.get('query'), values.get('limit',25)
+            scope = values.get('scope','matching')
+            if scope not in ('matching','full'): raise ValueError()
+            if scope == 'full':
+                if not isinstance(source,str) or source not in (*SOURCES,'all') or 'query' in values or 'limit' in values:
+                    raise ValueError()
+                async with archive_write_lock:
+                    if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before starting a full museum import.')
+                    try:
+                        return JSONResponse({'job':museum_jobs.start(source)},status_code=202)
+                    except RuntimeError as error:
+                        raise HTTPException(status_code=409,detail=str(error)) from None
             if not isinstance(source,str) or source not in SOURCES or type(limit) is not int or limit>200: raise ValueError()
             query, limit = validate_import_input(source,query,limit)
         except (ValueError,TypeError,UnicodeError):
             raise HTTPException(status_code=400,detail='Choose a museum, an artist or subject up to 200 characters, and 1–200 artworks.') from None
         async with archive_write_lock:
             if call_lock.locked(): raise HTTPException(status_code=409,detail='End the current call before importing a museum collection.')
+            if museum_jobs.running: raise HTTPException(status_code=409,detail='Stop the full collection import before importing a selection.')
             try:
                 result = await _archive_job(museum_importer.import_collection,collections_store,source,query,limit)
                 return {'results':[result], 'errors':[]}
@@ -511,7 +541,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 detector = TurnDetector(lambda pcm:vad.is_speech(pcm,16000))
             session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director,
                                   narrative=narrative, archive=archive if archive.enabled else None, archive_entries=archive_entries,
-                                  archive_search=archive_search)
+                                  archive_search=archive_search, image_lookup=museum_image_lookup)
             listen_after = 0.0
             accepted_barge_in_turn = None
             barge_in_reserved = False
