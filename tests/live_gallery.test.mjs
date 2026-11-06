@@ -67,6 +67,8 @@ test('name entry queues one introduction until a live connection is ready',()=>{
   assert.equal(document.getElementById('gallery-visitor-name').value,'Aley');
   assert.equal(document.getElementById('character-name').value,'Existing Robin');
   assert.equal(gallery.introduce('<script>'),false);assert.deepEqual(names,['Aley']);
+  document.getElementById('gallery-visitor-name').value='';gallery.greetAtStart();
+  assert.equal(gallery.visitorName,'');assert.equal(gallery.pendingName,'');assert.deepEqual(names,['Aley']);
 });
 
 test('galleryRecords validates source URLs, IDs and collections while retaining safe metadata-only records',()=>{

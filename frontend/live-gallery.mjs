@@ -34,11 +34,11 @@ export class ArchiveGallery{
   introduce(value){
     const name=typeof value==='string'?value.trim().replace(/\s+/g,' '):'';
     if(!name||name.length>60||!Array.from(name).every(char=>/\p{L}/u.test(char)||" -'’".includes(char))){this.get('gallery-name-status').textContent='Enter your name using letters, spaces, apostrophes or hyphens.';return false;}
-    this.visitorName=name;this.pendingName=name;
+    this.visitorName=name;this.pendingName=name;this.get('gallery-visitor-name').value=name;
     this.get('gallery-name-status').textContent='Start a call to hear your welcome, or wait for the current reply to finish.';
     return this.flushIntroduction();
   }
-  greetAtStart(){const name=this.get('gallery-visitor-name').value||this.visitorName;if(name)this.introduce(name);}
+  greetAtStart(){const name=this.get('gallery-visitor-name').value;if(name?.trim())this.introduce(name);else{this.visitorName='';this.pendingName='';}}
   flushIntroduction(){
     if(!this.pendingName)return false;
     if(this.onIntroduce(this.pendingName)!==true)return false;
