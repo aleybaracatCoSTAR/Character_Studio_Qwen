@@ -11,6 +11,7 @@ import {ArtworkChat} from './live-artwork.mjs';
 import {ListeningFeedback} from './live-listening.mjs';
 import {VoiceProgress} from './live-voice-progress.mjs';
 import {BargeInController} from './live-barge-in.mjs';
+import {EngineComparison} from './live-comparison.mjs';
 const $=id=>document.getElementById(id),form=$('character-form');
 const archivePage=location.pathname.startsWith('/archive');
 const fields=['name','role','about','goal','environment','voice_style','rules','memories','beat','speaker'];
@@ -18,6 +19,7 @@ let socket=null,context=null,stream=null,capture=null,playback=null,connecting=f
 let replyPending=false,resumeTimer=null;
 let interruptionsSupported=false,interruptionsPermitted=false;
 let imageStatusSupported=false;
+let streamingSpeech=false,streamingAudioQueued=false;
 let referenceURL=null;
 let triggerActive=false;
 let sessionReady=false,disconnecting=null;
@@ -29,6 +31,7 @@ const inspector=new PromptInspector({document,send});
 const archivePanel=new ArchivePanel({document,onChange:()=>saveActiveProfile()});
 const artworkChat=new ArtworkChat({document,container:$('messages'),empty:$('empty-state'),
   onImageStatus:value=>{if(imageStatusSupported&&socket?.readyState===WebSocket.OPEN)send(value);}});
+const comparison=new EngineComparison({document,onChange:()=>{feedback();updateEngineVoice();void status();}});
 const listeningFeedback=new ListeningFeedback({label:$('listening-mode'),partial:$('listening-partial'),
   onFinalizing:()=>{holdMicrophone();state('Finishing recognition… · Mic paused');},
   onListening:()=>{if(bargeIn.pending||replyPending&&bargeIn.isSuppressed(currentTurn))return;if(replyPending)resumeMicrophone();else state('Listening…');},
@@ -46,7 +49,7 @@ function triggerSettings(){return $('trigger-enabled').checked?{
   behaviour:$('trigger-behaviour').value,spoken_cue:$('trigger-cue').value,delivery:$('trigger-delivery').value
 }:null;}
 const replies=conversation.replies;
-const voiceProgress=new VoiceProgress({onState:state,onTiming:text=>{$('timing').textContent=text;},onText:text=>{
+const voiceProgress=new VoiceProgress({onState:message=>{if(!streamingSpeech||!streamingAudioQueued)state(message);},onTiming:text=>{$('timing').textContent=text;},onText:text=>{
   if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
   replies.get(currentTurn).content.textContent=text;scrollMessages();
 }});
@@ -139,7 +142,7 @@ function applyProfile(profile){
     if($('model-inspector').open)$('model-inspector').close();
     $('director-latest').hidden=true;$('director-note').textContent='';$('timing').textContent='';
     $('typed-form').hidden=true;$('typed-message').value='';$('trigger-state').textContent='Start a call to test the reaction.';
-    feedback();state('Ready when you are');previewStory();characterLibrary.writeLegacy();characterOptions();controls();
+    comparison.setCharacter(profile.id,profile.character.name);feedback();state('Ready when you are');previewStory();characterLibrary.writeLegacy();characterOptions();controls();
   }finally{loadingProfile=false;}
 }
 async function loadCharacterLibrary(){
@@ -186,6 +189,7 @@ function resumeMicrophone(){
 }
 function controls(){
   const connected=socket?.readyState===WebSocket.OPEN;
+  comparison.setBusy(!!connected||connecting||!!disconnecting);
   $('character-picker').disabled=!!connected||connecting||!characterLibrary;
   $('new-character').disabled=!!socket||connecting||!!disconnecting||!characterLibrary;
   $('start-call').disabled=connecting||(!connected&&!ready);$('start-call').classList.toggle('connected',!!connected);
@@ -197,10 +201,30 @@ function controls(){
   $('text-mode').hidden=!!connected;$('text-mode').disabled=connecting||!ready;
   $('send-text').disabled=!connected||!sessionReady;
   for(const element of form.elements)element.disabled=element.dataset.liveSetting?connecting:!!connected||connecting;
+  updateEngineVoice();
   archivePanel.setBusy(!!connected||connecting);
   $('test-trigger').disabled=!connected||!sessionReady||!$('trigger-enabled').checked;
   $('clear-trigger').disabled=!connected||!sessionReady||!triggerActive;
   document.querySelector('.live-badge').classList.toggle('active',!!connected);storyControls();
+}
+function updateEngineVoice(){
+  const native=comparison.engine()==='qwen-omni';
+  for(const option of $('voice-preset').options){
+    if(option.value==='custom')option.disabled=native;
+    if(option.value==='female')option.textContent=native?'Female · Chelsie':'Female · British';
+    if(option.value==='male')option.textContent=native?'Male · Ethan':'Male · British';
+  }
+  if(native){$('voice-reference').disabled=true;$('reference-text').disabled=true;}
+  $('engine-voice-note').hidden=!native;
+  $('preset-voice-credit').hidden=native;
+  $('preset-audio').hidden=native||!['female','male'].includes($('voice-preset').value);
+  if(native)$('preset-audio').pause();
+  else if(['female','male'].includes($('voice-preset').value)){
+    const source=`/api/voice/${$('voice-preset').value}`;
+    if($('preset-audio').getAttribute('src')!==source)$('preset-audio').src=source;
+  }
+  $('custom-voice-fields').hidden=native||$('voice-preset').value!=='custom';
+  $('engine-attribution').textContent=native?'Qwen3-Omni · Native audio input and streaming audio output · Turn-based conversation':'Built with Fish Audio · Speech recognition → director → character actor → Drama 3 voice';
 }
 function message(speaker,text,kind='assistant'){return conversation.message(speaker,text,kind);}
 function scrollMessages(){if(!artworkChat.scrollForReply())$('messages').scrollTop=$('messages').scrollHeight;}
@@ -212,6 +236,7 @@ async function disconnect(){
   archivePanel.resetSources();
   artworkChat.disconnect();
   imageStatusSupported=false;
+  streamingSpeech=false;streamingAudioQueued=false;comparison.endCall();
   listeningFeedback.reset();
   bargeIn.reset();interruptionsPermitted=false;
   voiceRetry.clear();
@@ -234,6 +259,7 @@ function event(data){
     if(replyPending&&!bargeIn.isSuppressed(currentTurn))state('Reply in progress · Mic paused');return;
   }
   if(bargeIn.isSuppressed(data.turn_id)&&data.type!=='interrupted')return;
+  comparison.accept(data);
   if(data.type==='listening_state'||data.type==='listening_partial'){listeningFeedback.accept(data);return;}
   if(data.type==='model_inspection'){inspector.accept(data);return;}
   if(data.type==='archive_sources'){if(archivePanel.showSources(data))artworkChat.accept(data,archivePanel.sourceMatches);return;}
@@ -253,10 +279,12 @@ function event(data){
     else if(data.action==='hold')$('trigger-state').textContent=(triggerActive?'Reaction continues':'Normal state')+(data.evidence?` · ${data.evidence}`:'');
     state('Thinking… · Mic paused');return;
   }
-  if(data.type==='ready'){listeningFeedback.setMode(data.listening_mode);sessionReady=true;imageStatusSupported=data.image_status===true;interruptionsPermitted=data.interruptions===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
+  if(data.type==='ready'){
+    if(!comparison.ready(data)||!playback?.setRate(data.output_rate??44100)){feedback('The server selected an incompatible engine or audio format. End the call, refresh and try again.');void disconnect();return;}
+    streamingSpeech=data.streaming_speech===true;listeningFeedback.setMode(data.listening_mode);sessionReady=true;imageStatusSupported=data.image_status===true;interruptionsPermitted=data.interruptions===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
-  if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;bargeIn.begin(data.turn_id);listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);artworkChat.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
+  if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;streamingAudioQueued=false;bargeIn.begin(data.turn_id);listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);artworkChat.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
   if(data.type==='interrupted'){
     if(data.turn_id===currentTurn){voiceProgress.finish(currentTurn);voiceRetry.clear();playback.clear();if(!bargeIn.isSuppressed(data.turn_id))resumeMicrophone();const reply=replies.get(data.turn_id);if(reply){reply.content.textContent=data.heard||'Reply stopped';reply.node.classList.add('interrupted');}}
     return;
@@ -267,7 +295,7 @@ function event(data){
   if(data.turn_id!==currentTurn)return;
   if(data.type==='text_done'||data.type==='voice_progress'){voiceProgress.accept(data);return;}
   if(data.type==='voice_notice'){feedback(data.message,'voice_notice');return;}
-  if(data.type==='phrase_start'){state('Preparing the whole reply… · Mic paused');return;}
+  if(data.type==='phrase_start'){state(data.streaming===true?(streamingAudioQueued?'Speaking… · Mic paused':'Streaming reply… · Mic paused'):'Preparing the whole reply… · Mic paused');return;}
   if(data.type==='transcript'){message(data.source==='action'?'Stage action':'You',data.display_text??data.text,'user');state($('director-enabled').checked?'Directing the next reply… · Mic paused':$('trigger-enabled').checked?'Reading the situation… · Mic paused':'Thinking… · Mic paused');}
   if(data.type==='text_delta'){
     if(!replies.has(currentTurn))replies.set(currentTurn,message(character().name,''));
@@ -287,6 +315,7 @@ function event(data){
 }
 async function connect(useMic=true){
   if(connecting)return;if(socket){await disconnect();return;}if(!form.reportValidity())return;
+  const engineProblem=comparison.startProblem({preset:$('voice-preset').value});if(engineProblem){feedback(engineProblem);return;}
   if(archivePanel.pending){feedback('Wait for the archive story to finish saving or loading, then start the call.');return;}
   const outline=narrativeSettings();
   if(outline.enabled&&(!outline.beats.length||outline.beats.some(beat=>!beat.title.trim()||!beat.goal.trim()||!Number.isFinite(beat.min_seconds)||!Number.isFinite(beat.max_seconds)||beat.max_seconds<=beat.min_seconds))){
@@ -298,7 +327,7 @@ async function connect(useMic=true){
     context=new AudioContext();await context.resume();
     let voice;
     try{voice=await voiceSettings();}catch(error){feedback(error.message);await disconnect();return;}
-    playback=new PCMPlayback(context,send,()=>state('Speaking… · Mic paused'),resumeMicrophone);
+    playback=new PCMPlayback(context,send,()=>{streamingAudioQueued=true;comparison.audioQueued(currentTurn);state('Speaking… · Mic paused');},()=>{comparison.playbackComplete(currentTurn);resumeMicrophone();});
     if(useMic){
       stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}});
       for(const track of stream.getAudioTracks()){
@@ -312,7 +341,8 @@ async function connect(useMic=true){
     opened.onerror=()=>{if(socket===opened)feedback('Cannot connect to the live server. Check its terminal and SSH tunnel.');};
     opened.onclose=async()=>{if(socket===opened){feedback('Live connection closed. Check that all three services are ready.');await disconnect();}};
     await new Promise((resolve,reject)=>{opened.onopen=resolve;opened.addEventListener('error',reject,{once:true});opened.addEventListener('close',()=>reject(new Error('Connection closed')),{once:true});});
-    send({type:'start',character:character(),voice,trigger:triggerSettings(),director:directorSettings(),narrative:narrativeSettings(),archive:archivePanel.settings(),interruptions:useMic&&$('allow-interruptions').checked});
+    comparison.beginCall({id:characterLibrary?.activeId||'current-character',profile:capturedProfile(),input:useMic?'speech':'text'});
+    send({type:'start',...comparison.startFields(),character:character(),voice,trigger:triggerSettings(),director:directorSettings(),narrative:narrativeSettings(),archive:archivePanel.settings(),interruptions:useMic&&$('allow-interruptions').checked});
     if(useMic){
       const source=context.createMediaStreamSource(stream),gain=context.createGain();gain.gain.value=0;
       capture=new AudioWorkletNode(context,'live-capture');const resampler=new StreamResampler(context.sampleRate);
@@ -382,11 +412,10 @@ for(const id of ['voice-emotion','voice-event','voice-direction'])$(id).addEvent
 });
 function updateVoicePreset(){
   const preset=$('voice-preset').value;
-  $('custom-voice-fields').hidden=preset!=='custom';
-  $('preset-audio').hidden=!['female','male'].includes(preset);
   $('preset-audio').pause();
-  if(['female','male'].includes(preset))$('preset-audio').src=`/api/voice/${preset}`;
+  if(comparison.engine()!=='qwen-omni'&&['female','male'].includes(preset))$('preset-audio').src=`/api/voice/${preset}`;
   else $('preset-audio').removeAttribute('src');
+  updateEngineVoice();
 }
 $('voice-preset').addEventListener('change',()=>{
   updateVoicePreset();
@@ -421,12 +450,13 @@ for(const id of ['director-enabled','director-input'])$(id).addEventListener('ch
 });
 async function status(){
   try{
-    const response=await fetch('/api/status'),data=await response.json();ready=data.ready;interruptionsSupported=data.voice_interruptions===true;inspector.setSupported(data.model_inspection===true);
+    const response=await fetch('/api/status'),data=await response.json();comparison.setCapabilities(data.comparison);ready=comparison.supported?comparison.isReady():data.ready;interruptionsSupported=data.voice_interruptions===true;inspector.setSupported(data.model_inspection===true);
     listeningFeedback.setMode(data.listening?.mode);
     $('status').textContent=data.preview?'Design preview':ready?'Voice services ready':'Services starting…';$('status').className=ready?'ready':'';
     $('mode-note').textContent=data.preview?'Design preview. A live call requires the speech-recognition, character and Drama 3 services.':ready
       ?interruptionsSupported&&$('allow-interruptions').checked?'Speak and pause to hear a reply. With Allow interruptions on, speak over the character or use Stop reply.':'Speak and pause to hear a reply. Use Stop reply to take over while the character is speaking.'
       :data.stt_error||Object.entries(data.services).map(([name,ok])=>`${name.toUpperCase()}: ${ok?'ready':'not ready'}`).join(' · ');
+    if(comparison.supported&&comparison.engine()==='qwen-omni')$('mode-note').textContent=data.preview?'Design preview. Streaming tests need the Qwen3-Omni stack.':ready?'Qwen3-Omni receives audio and streams its spoken reply. Director and archive retrieval run first. Full-reply speech checking is off in this experiment.':comparison.startProblem({});
     if(data.busy&&!socket){ready=false;$('mode-note').textContent='Another voice session is active. End that call before starting a new one.';}
     else if(archivePanel.enabled&&archivePanel.collectionIds.length&&data.artwork_images!=='dialogue-v2')
       $('mode-note').textContent+=' Restart the updated studio server to enable reliable image requests.';

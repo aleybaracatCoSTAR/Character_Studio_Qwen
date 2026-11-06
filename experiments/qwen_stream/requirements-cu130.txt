@@ -1,0 +1,9 @@
+# Isolated streaming experiment: CPython 3.12, Linux x86_64, official cu130 wheels.
+# No package in .venv-live, .venv-drama3 or .venv-listening is changed.
+torch @ https://download-r2.pytorch.org/whl/cu130/torch-2.13.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=8db7338e6895c3d4bd89a02ff4209507d1f0cf2ffeb3b898538b5a07d1ea8c1e
+torchaudio @ https://download-r2.pytorch.org/whl/cu130/torchaudio-2.11.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=3fba988f4301fe13547fe5e99c76d9ae36a27e19ded82eeffed9d2456e12edef
+torchvision @ https://download-r2.pytorch.org/whl/cu130/torchvision-0.28.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=8a0008d34ccc4e81066b97ff0ae5a34c676bfdf3464baf40c01b320dc9a45ce0
+vllm==0.32.0
+vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@798fef99a33fba3ad3c2439d6ec10fe838c0076b
+# Exact available release within this Omni revision's >=5.16.1,<5.20.0 constraint.
+transformers==5.16.1

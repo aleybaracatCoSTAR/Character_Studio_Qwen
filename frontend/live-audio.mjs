@@ -24,6 +24,10 @@ export function unpackAudio(buffer){
 
 export class PCMPlayback {
   constructor(context,send,onSpeaking,onIdle){this.context=context;this.send=send;this.onSpeaking=onSpeaking;this.onIdle=onIdle;this.sources=new Set();this.recent=[];this.turn=0;this.phrases=new Map();this.nextAck=0;this.nextTime=0;this.finished=false;this.rate=44100;this.prebufferSamples=Math.ceil(this.rate*.12);this.batchSamples=Math.ceil(this.rate*.06);}
+  setRate(rate){
+    if(![24000,44100].includes(rate))return false;
+    this.clear();this.rate=rate;this.prebufferSamples=Math.ceil(rate*.12);this.batchSamples=Math.ceil(rate*.06);return true;
+  }
   setTurn(turn){this.clear();this.turn=turn;}
   record(sequence){if(!this.phrases.has(sequence))this.phrases.set(sequence,{pending:0,done:false,acked:false,buffers:[],samples:0});return this.phrases.get(sequence);}
   push(buffer){

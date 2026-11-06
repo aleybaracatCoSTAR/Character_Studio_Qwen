@@ -35,6 +35,7 @@ from .museum_common import GUIDE_URL, MUSEUM_SOURCES, SOURCES, MuseumImportError
 from .museum_import import MuseumImporter, museum_error
 from .museum_jobs import MuseumJobs
 from .museum_image_lookup import MuseumImageLookup
+from .engines import engine_name
 from .museum_images import MuseumImages, MuseumImageUnavailable
 from .listening import ListeningClient, ListeningSession, ListeningError
 from .listening_config import EXPERIMENT, listening_mode, listening_profile
@@ -73,7 +74,8 @@ async def _archive_job(callback, *args, dispose=None, **kwargs):
 
 
 def create_app(preview=False, providers=None, vad_factory=None, archive_store=None, archive_importer=None, listening_client=None,
-               collections_store=None, museum_importer=None, museum_images=None, museum_bulk_runner=None, museum_image_lookup=None):
+               collections_store=None, museum_importer=None, museum_images=None, museum_bulk_runner=None, museum_image_lookup=None,
+               omni_provider=None):
     input_mode = listening_mode()
     deployment = listening_profile(profile(),input_mode)
     experimental = (listening_client or ListeningClient(os.environ.get('LIVE_LISTENING_URL','http://127.0.0.1:18095'))) if input_mode == EXPERIMENT else None
@@ -88,6 +90,13 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                                           director_timeout=os.environ.get("LIVE_DIRECTOR_TIMEOUT",deployment["director_timeout"]),
                                           verify_voice=os.environ.get('LIVE_VERIFY_VOICE','1') != '0',
                                           verification_timeout=os.environ.get('LIVE_VOICE_VERIFY_TIMEOUT','20'))
+    default_engine = engine_name(os.environ.get('LIVE_DEFAULT_ENGINE','baseline'))
+    if omni_provider is None and os.environ.get('LIVE_OMNI_URL'):
+        from .omni import OmniProvider
+        omni_provider = OmniProvider(services,os.environ['LIVE_OMNI_URL'],
+            model=os.environ.get('LIVE_OMNI_MODEL','Qwen/Qwen3-Omni-30B-A3B-Instruct'))
+    if default_engine == 'qwen-omni' and omni_provider is None:
+        raise ValueError('Set LIVE_OMNI_URL before selecting the Qwen3-Omni runtime.')
     call_lock = asyncio.Lock()
     downloads = ExportDownloads()
     owns_archive_store = archive_store is None
@@ -111,6 +120,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         if task and not task.done(): task.cancel()
         downloads.clear()
         await asyncio.to_thread(museum_jobs.close)
+        if omni_provider is not None: await omni_provider.close()
         await services.close()
         if experimental is not None: await experimental.close()
         await museum_images.close()
@@ -118,8 +128,8 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
         if owns_archive_store: await asyncio.to_thread(archive_store.close)
         if owns_collections_store: await asyncio.to_thread(collections_store.close)
 
-    async def service_health():
-        health = await services.health()
+    async def service_health(selected_services=None):
+        health = await (selected_services or services).health()
         if experimental is not None:
             listening_health = await experimental.health()
             health = {**health,'streaming_asr':bool(listening_health.get('ready') and listening_health.get('asr')),
@@ -422,9 +432,18 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
 
     @app.get("/api/status")
     async def status():
-        health = {"stt":False,"llm":False,"tts":False} if preview else await service_health()
+        baseline_health = {"stt":False,"llm":False,"tts":False} if preview else await service_health()
+        omni_health = ({'stt':False,'omni':False,'director':False} if preview or omni_provider is None
+                       else await service_health(omni_provider))
+        health = omni_health if default_engine == 'qwen-omni' else baseline_health
         return {"preview":preview,"ready":all(health.values()),"services":health,
-                "voice_pipeline":"voice-checked-v5", "voice_progress":True,
+                "voice_pipeline":"qwen-omni-stream-v1" if default_engine == 'qwen-omni' else "voice-checked-v5", "voice_progress":True,
+                'comparison':{'default_engine':default_engine,'director_policy':'same-turn',
+                    'engines':{'baseline':{'available':True,'ready':all(baseline_health.values()),
+                        'services':baseline_health,'output_rate':44100,'streaming_speech':False},
+                        'qwen-omni':{'available':omni_provider is not None,'ready':omni_provider is not None and all(omni_health.values()),
+                        'services':omni_health,'output_rate':24000,'streaming_speech':True,
+                        'model':'Qwen/Qwen3-Omni-30B-A3B-Instruct','whole_reply_verification':False}}},
                 "listening":{"mode":input_mode,'experimental':experimental is not None,
                              'input_asr':'Nemotron streaming 0.6B' if experimental is not None else 'Faster-Whisper base.en',
                              'turn_detector':'Smart Turn 3.2' if experimental is not None else 'VAD pause',
@@ -437,10 +456,11 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                             "selection_limit":50,"bulk_import":True} if isinstance(archive_store,ArchiveDatabase)
                            else {"available":True,"scope":"selected","limit":50}),
                 "beat_entry_replies":True, "voice_retry":True, "voice_interruptions":True,
-                "voice_verification":bool(getattr(services,'verify_voice',False)),
+                "voice_verification":default_engine == 'baseline' and bool(getattr(services,'verify_voice',False)),
                 "busy":call_lock.locked(), "stt_error":getattr(services.stt,"error",None),
                 "profile":os.environ.get("LIVE_PROFILE","shared"),
-                "models":{"actor":deployment['actor']['id'],"director":(deployment['director'] or deployment['actor'])['id']},
+                "models":{"actor":'Qwen/Qwen3-Omni-30B-A3B-Instruct' if default_engine == 'qwen-omni' else deployment['actor']['id'],
+                          "director":(deployment['director'] or deployment['actor'])['id']},
                 "director":{"model":getattr(services,"director_model","live-character"),
                             "shared_model":getattr(services,"director_url",None)==getattr(services,"llm_url",None) and getattr(services,"director_model","live-character")=="live-character"}}
 
@@ -499,21 +519,46 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
             async with send_lock: await socket.send_bytes(value)
         try:
             await socket.accept()
-            health = await service_health()
-            if not all(health.values()):
-                message = ('Experimental listening is not ready. Check the listening service log and local checkpoints.'
-                           if experimental is not None and not (health.get('streaming_asr') and health.get('turn_detector'))
-                           else 'Start speech recognition, the text model and Drama 3 first.')
-                await send_json({"type":"error", "message":message}); return
+            baseline_preflight = None
+            if omni_provider is None:
+                # Preserve the original baseline's immediate readiness failure.
+                baseline_preflight = await service_health()
+                if not all(baseline_preflight.values()):
+                    message = ('Experimental listening is not ready. Check the listening service log and local checkpoints.'
+                        if experimental is not None and not (baseline_preflight.get('streaming_asr') and baseline_preflight.get('turn_detector'))
+                        else 'Start speech recognition, the text model and Drama 3 first.')
+                    await send_json({'type':'error','message':message}); return
+            elif experimental is not None:
+                listening_health = await experimental.health()
+                if not (listening_health.get('ready') and listening_health.get('asr') and listening_health.get('turn')):
+                    await send_json({'type':'error','message':'Experimental listening is not ready. Check the listening service log and local checkpoints.'}); return
             initial = await asyncio.wait_for(socket.receive_text(), timeout=15)
             if len(initial.encode("utf-8")) > MAX_START_BYTES: raise ValueError("Voice reference is too large.")
             config = json.loads(initial)
             if not isinstance(config, dict) or config.get("type") != "start":
                 raise ValueError("Start a character call first.")
+            # An older browser must never receive 24 kHz PCM using its fixed
+            # 44.1 kHz player. Native streaming requires an explicit engine opt-in.
+            selected_engine = engine_name(config.get('engine'))
+            selected_services = omni_provider if selected_engine == 'qwen-omni' else services
+            if selected_services is None:
+                await send_json({'type':'error','message':'Start the streaming Qwen3-Omni stack before choosing this engine.'}); return
+            health = baseline_preflight if selected_engine == 'baseline' and baseline_preflight is not None else await service_health(selected_services)
+            if not all(health.values()):
+                message = ('Experimental listening is not ready. Check the listening service log and local checkpoints.'
+                           if experimental is not None and not (health.get('streaming_asr') and health.get('turn_detector'))
+                           else 'Start Qwen3-Omni, speech recognition and the director first.' if selected_engine == 'qwen-omni'
+                           else 'Start speech recognition, the text model and Drama 3 first.')
+                await send_json({"type":"error", "message":message}); return
             interruptions = config.get('interruptions', False)
             if type(interruptions) is not bool: raise ValueError('Invalid interruption setting.')
             selected = Character.model_validate(config.get("character"))
             voice = VoiceSettings.model_validate(config.get("voice", {}))
+            if selected_engine == 'qwen-omni':
+                from .omni import native_voice
+                try: native_voice(selected,voice)
+                except ValueError as error:
+                    await send_json({'type':'error','message':str(error)}); return
             trigger = EmotionalTrigger.model_validate(config["trigger"]) if config.get("trigger") is not None else None
             director = DirectorSettings.model_validate(config.get("director", {}))
             narrative = NarrativeSettings.model_validate(config.get("narrative", {}))
@@ -539,7 +584,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 import webrtcvad
                 vad = webrtcvad.Vad(2)
                 detector = TurnDetector(lambda pcm:vad.is_speech(pcm,16000))
-            session = LiveSession(services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director,
+            session = LiveSession(selected_services, selected, send_json, send_bytes, voice=voice, trigger=trigger, director=director,
                                   narrative=narrative, archive=archive if archive.enabled else None, archive_entries=archive_entries,
                                   archive_search=archive_search, image_lookup=museum_image_lookup)
             listen_after = 0.0
@@ -577,21 +622,25 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 async def input_endpoint(endpoint_ms, metrics):
                     await send_json({'type':'listening_state','phase':'finalizing','input_id':listening_sequence})
                 async def input_final(pcm, text, endpoint_ms, metrics):
-                    await session.begin(text=text,endpoint_ms=endpoint_ms,recognition_metrics=metrics)
+                    await session.begin(pcm=pcm if selected_engine == 'qwen-omni' else None,
+                        text=text,endpoint_ms=endpoint_ms,recognition_metrics=metrics)
                 async def input_error(message):
                     clear_barge_in_reservation()
                     session.input_active = False
                     await send_json({'type':'listening_state','phase':'error','input_id':listening_sequence,'message':message})
                 listener = ListeningSession(experimental,detector.is_speech,on_start=input_started,
                     on_partial=input_partial,on_endpoint=input_endpoint,on_final=input_final,on_error=input_error)
-            await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
+            await send_json({"type":"ready", "sample_rate":16000, "output_rate":session.output_rate,
+                             'engine':selected_engine,'streaming_speech':session.streaming_speech,
+                             'voice_verification':not session.streaming_speech and bool(getattr(services,'verify_voice',False)),
                              "artwork_images":"dialogue-v2", "image_status":True,
                              "endpoint_ms":300 if experimental is not None else detector.silence_frames * 20,
                              "turn_taking":("Speak to interrupt; Stop reply remains available" if interruptions
                                             else "Stop reply to interrupt; mic resumes after playback"),
                              "interruptions":interruptions,
                              "listening_mode":input_mode,
-                             "voice":"uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated reply anchors this call"})
+                             "voice":native_voice(selected,voice) if selected_engine == 'qwen-omni' else
+                                "uploaded reference" if voice.reference_audio else f"{voice.preset} reference" if voice.preset in ("female","male") else "first generated reply anchors this call"})
             await session.start_story()
             while True:
                 message = await socket.receive()

@@ -44,6 +44,9 @@ class LiveSession:
     def __init__(self, providers, character, send_json, send_bytes, voice=None, trigger=None, director=None, narrative=None, clock=time.monotonic,
                  archive=None, archive_entries=(), archive_search=None, image_lookup=None):
         self.providers = providers
+        self.engine = getattr(providers,'engine','baseline')
+        self.streaming_speech = self.engine == 'qwen-omni'
+        self.output_rate = getattr(providers,'output_rate',OUTPUT_RATE)
         self.character = character
         self.send_json = send_json
         self.send_bytes = send_bytes
@@ -53,7 +56,7 @@ class LiveSession:
         self.task = None
         self.turn_id = 0
         self.voice = voice or VoiceSettings()
-        self.reference = self.voice.reference()
+        self.reference = None if self.streaming_speech else self.voice.reference()
         self.started = 0
         self.reply_pending = False
         self.generation_complete = False
@@ -316,9 +319,10 @@ class LiveSession:
 
     async def run_turn(self, turn_id, pcm, text, endpoint_ms, action=False, recognition_metrics=None):
         started = self.started
-        metrics = {"endpoint_ms":endpoint_ms,**recognition_timings(recognition_metrics)}
+        metrics = {"endpoint_ms":endpoint_ms,"engine":self.engine,**recognition_timings(recognition_metrics)}
         try:
-            await self.send_json({"type":"turn_start", "turn_id":turn_id})
+            await self.send_json({"type":"turn_start", "turn_id":turn_id,
+                                  "engine":self.engine,"streaming_speech":self.streaming_speech})
             now = time.perf_counter()
             if text is None:
                 text = await self.prepared_recognition.transcribe(pcm)
@@ -342,6 +346,7 @@ class LiveSession:
                 transcript['display_text'] = self.trigger.condition
             await self.send_json(transcript)
             archive_context = None
+            archive_started = time.perf_counter()
             if self.archive:
                 scope = self.archive.scope
                 requested_image = image_request(text) if not action else None
@@ -387,6 +392,7 @@ class LiveSession:
                 # A brief acknowledgement does not replace the artwork topic.
                 if matches or requested_image or not image_reference_ack(text):
                     self.last_archive_matches = copy.deepcopy(list(matches)[:3])
+            metrics['archive_ms'] = round((time.perf_counter()-archive_started)*1000)
             plan = None
             if self.director.enabled:
                 check_started = time.perf_counter()
@@ -463,11 +469,23 @@ class LiveSession:
                 target = target.model_copy(update={"beat":target.beat + "\n\n" + self.story.runtime_note()})
             if plan:
                 target = target.model_copy(update={"beat":target.beat + "\n\n" + plan.actor_note()})
+            if self.streaming_speech:
+                reply = await self.stream_native_reply(turn_id,target,pcm if not action else None,
+                    delivery,archive_context,metrics,started)
+                if self.archive:
+                    offered_keys = image_offer(reply,matches)
+                    self.pending_image_offer = (copy.deepcopy([match for match in matches
+                        if (match.get('collection_id','qtm'),match.get('id')) in offered_keys]) if offered_keys else [])
+                self.generation_complete = True
+                await self.send_json({'type':'response_done','turn_id':turn_id,'text':reply,'engine':self.engine})
+                return
             answer = []
             llm_started = time.perf_counter()
             async for delta in self.providers.text(target, self.history.prompt_messages(),
                     **({'archive':archive_context} if self.archive else {})):
-                if not answer: metrics["llm_first_token_ms"] = round((time.perf_counter() - llm_started) * 1000)
+                if not answer:
+                    metrics["llm_first_token_ms"] = round((time.perf_counter() - llm_started) * 1000)
+                    metrics['first_text_ms'] = round((time.perf_counter()-started)*1000)
                 answer.append(delta)
                 await self.send_json({"type":"text_delta", "turn_id":turn_id, "text":delta})
             metrics["llm_total_ms"] = round((time.perf_counter() - llm_started) * 1000)
@@ -494,6 +512,67 @@ class LiveSession:
         except Exception as exc:
             await self.turn_error(turn_id, exc)
 
+    async def stream_native_reply(self,turn_id,target,pcm,delivery,archive_context,metrics,started):
+        """Forward native chunks as they arrive; no whole-take TTS verification."""
+        from .omni import native_voice
+        answer = []
+        total_chars = audio_bytes = audio_chunks = 0
+        complete = phrase_started = False
+        model_started = time.perf_counter()
+        metrics.update(voice_pipeline='qwen-omni-stream-v1',voice_verification=False,
+                       input_mode='native-audio' if pcm is not None else 'text',output_rate=self.output_rate)
+        async for event in self.providers.stream_response(target,self.history.prompt_messages(),
+                pcm=pcm,delivery=delivery,archive=archive_context,
+                voice=native_voice(self.character,self.voice)):
+            if complete: raise RuntimeError('Streaming engine sent data after completion.')
+            if not isinstance(event,dict): raise RuntimeError('Invalid native stream event.')
+            if event.get('type') == 'text':
+                delta = event.get('text')
+                if not isinstance(delta,str): raise RuntimeError('Invalid native text chunk.')
+                if not delta: continue
+                total_chars += len(delta)
+                if total_chars>16000: raise RuntimeError('Native reply exceeded its text limit.')
+                if not answer:
+                    metrics['first_text_ms'] = round((time.perf_counter()-started)*1000)
+                    metrics['llm_first_token_ms'] = round((time.perf_counter()-model_started)*1000)
+                answer.append(delta)
+                await self.send_json({'type':'text_delta','turn_id':turn_id,'text':delta})
+            elif event.get('type') == 'audio':
+                chunk = event.get('pcm')
+                if (not isinstance(chunk,bytes) or not chunk or len(chunk)%2
+                        or event.get('sample_rate') != self.output_rate):
+                    raise RuntimeError('Invalid native PCM stream.')
+                if audio_bytes+len(chunk)>self.output_rate*2*90:
+                    raise RuntimeError('Native reply exceeded its audio limit.')
+                if not phrase_started:
+                    phrase_started = True
+                    await self.send_json({'type':'phrase_start','turn_id':turn_id,'seq':0,'text':'',
+                                          'streaming':True,'engine':self.engine})
+                    metrics['first_audio_ms'] = metrics['speech_end_to_first_audio_ms'] = round((time.perf_counter()-started)*1000)
+                    await self.send_json({'type':'metrics','turn_id':turn_id,**metrics})
+                audio_bytes += len(chunk); audio_chunks += 1
+                for offset in range(0,len(chunk),16384):
+                    await self.send_bytes(struct.pack('!II',turn_id,0)+chunk[offset:offset+16384])
+            elif event.get('type') == 'done':
+                complete = True
+            else:
+                raise RuntimeError('Unknown native stream event.')
+        reply = ''.join(answer).strip()
+        if not complete or not reply or not audio_bytes:
+            raise RuntimeError('The native speech reply did not finish with text and audio.')
+        # Only a completed generated reply can later be acknowledged as heard.
+        # Interrupted partial audio lacks word alignment and is never invented
+        # as a full heard assistant turn.
+        self.history.add_phrase(0,reply)
+        await self.send_json({'type':'text_done','turn_id':turn_id,'text':reply})
+        metrics['llm_total_ms'] = round((time.perf_counter()-model_started)*1000)
+        metrics['complete_ms'] = round((time.perf_counter()-started)*1000)
+        await self.send_json({'type':'metrics','turn_id':turn_id,**metrics})
+        await self.send_json({'type':'phrase_done','turn_id':turn_id,'seq':0,
+            'audio_seconds':round(audio_bytes/(2*self.output_rate),3),'audio_chunks':audio_chunks,
+            'generation_ms':metrics['llm_total_ms']})
+        return reply
+
     async def speak_reply(self, take, metrics, started):
         turn_id, reply = take['turn_id'], take['reply']
         await self.send_json({"type":"phrase_start", "turn_id":turn_id, "seq":0, "text":reply})
@@ -511,6 +590,9 @@ class LiveSession:
                     metrics.update(voice_timing_metrics(getattr(self.providers,'last_voice_metrics',None)))
                     metrics["tts_first_chunk_ms"] = round((time.perf_counter() - tts_started) * 1000)
                     metrics["speech_end_to_first_audio_ms"] = round((time.perf_counter() - started) * 1000)
+                    metrics['first_audio_ms'] = metrics['speech_end_to_first_audio_ms']
+                    metrics['voice_pipeline'] = 'voice-checked-v5'
+                    metrics['voice_verification'] = bool(getattr(self.providers,'verify_voice',False))
                     await self.send_json({"type":"metrics", "turn_id":turn_id, **metrics})
                 if take['reference'] is None: reference_audio.extend(chunk)
                 audio_bytes += len(chunk); audio_chunks += 1
@@ -524,7 +606,9 @@ class LiveSession:
             "generation_ms":round((time.perf_counter() - tts_started) * 1000)})
         self.generation_complete = True
         self.retryable_voice = None
-        await self.send_json({"type":"response_done", "turn_id":turn_id, "text":reply})
+        metrics['complete_ms'] = round((time.perf_counter()-started)*1000)
+        await self.send_json({'type':'metrics','turn_id':turn_id,**metrics})
+        await self.send_json({"type":"response_done", "turn_id":turn_id, "text":reply,'engine':self.engine})
 
     async def turn_error(self, turn_id, exc):
         # Keep dialogue, character data and captured audio out of logs.
@@ -543,7 +627,11 @@ class LiveSession:
         can_retry = bool(take and take['turn_id'] == turn_id and not take['audio_started']
                          and self.history.current == turn_id and take['revision'] == self.story.revision)
         if not can_retry: self.retryable_voice = None
-        if isinstance(exc, VoiceServiceUnavailable): message = str(exc) + ' Details: ' + exc.safe_summary() + '.'
+        if self.streaming_speech:
+            message = ('The Qwen3-Omni stream did not finish. Some audio may already have played. '
+                       'The incomplete reply is not saved as a heard conversation turn. Check the Omni service log and try again.')
+            can_retry = False
+        elif isinstance(exc, VoiceServiceUnavailable): message = str(exc) + ' Details: ' + exc.safe_summary() + '.'
         elif isinstance(exc, VoiceTakeIncomplete):
             message = ("The voice take did not finish: " + exc.safe_summary() +
                        ". The delivery has not been changed. Use Retry voice to keep this reply's words, emotion and voice settings.")

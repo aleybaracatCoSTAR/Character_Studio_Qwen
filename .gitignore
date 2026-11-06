@@ -27,3 +27,5 @@ slurm-character-*.log
 .DS_Store
 
 !assets/voices/*.wav
+.venv-qwen-stream/
+slurm-qwen-stream-*.log
