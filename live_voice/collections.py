@@ -21,7 +21,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .archive import _excerpt
-from .artwork_retrieval import ArtworkIndex, fold, retrieval_terms
+from .artwork_retrieval import ArtworkIndex, fold, retrieval_terms, spoken_artwork_query
 
 
 DATABASE_NAME = 'collections.sqlite3'
@@ -207,14 +207,15 @@ def _art_facet_followup(query, terms):
 
 def _query_terms(query, history=()):
     if not isinstance(query, str): raise ValueError('Use a plain-text collection question.')
-    query = query.strip()[:4000]
+    query = spoken_artwork_query(query)
     terms = set(_terms(query))
     if not _art_facet_followup(query, terms) and (terms or not _FOLLOWUP.search(query)): return terms
     for message in reversed(tuple(history)[-24:]):
         if not isinstance(message, dict) or message.get('role') != 'user': continue
         content = message.get('content')
-        if not isinstance(content, str) or content.strip().casefold() == query.casefold(): continue
-        content = content[:4000]
+        if not isinstance(content, str): continue
+        content = spoken_artwork_query(content)
+        if content.casefold() == query.casefold(): continue
         earlier = set(_terms(content))
         if _art_facet_followup(content, earlier): continue
         if earlier: return earlier
@@ -223,6 +224,7 @@ def _query_terms(query, history=()):
 
 
 def _fts_query(query, history=()):
+    query = spoken_artwork_query(query)
     terms = set(sorted(retrieval_terms(query, _query_terms(query, history)))[:MAX_QUERY_TERMS])
     return terms, ' OR '.join('"' + term.replace('"', '""') + '"' for term in sorted(terms))
 

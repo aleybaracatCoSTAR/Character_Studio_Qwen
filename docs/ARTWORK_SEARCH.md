@@ -45,6 +45,8 @@ The auxiliary index is prepared once for each frozen call before the first utter
 
 This remains bounded lexical retrieval, not embeddings, semantic image search, model training or guaranteed transcription correction. Spoken-year normalization handles conventional century/tens forms such as “thirteen eighty-seven” in date-search contexts. Dates retain the source's approximate wording and are not invented as exact creation years. Conceptual descriptions absent from catalogue text can still require another search phrase.
 
+Spoken search lead-ins such as **Uh no, I’m looking for landscapes** are removed from the lookup text, so “I’m” cannot dominate the result as an incidental artwork-title keyword. The actual transcript stays unchanged. Cleanup is anchored to explicit search clauses and preserves literal/named titles such as **I’m Jealous** and meaningful uses of **No**. It also runs before spoken-year normalization, so **I’m looking for thirteen eighty-seven** still searches 1387. This corrects the lookup phrase; it does not add semantic genre classification.
+
 ## Update and test
 
 Pull and restart the existing app using the [Surrey setup](LIVE_SETUP.md), then refresh the portal. Existing NGA data does not need to be imported again for these search changes. New [museum selections](MUSEUM_COLLECTIONS.md) still need their own explicit imports on that server.

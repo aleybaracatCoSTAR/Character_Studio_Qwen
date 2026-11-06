@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import live_voice.collections as catalog
 from live_voice.artwork_retrieval import (ArtworkIndex, MAX_ALLOWED_SETS, MAX_CANDIDATES,
-                                         one_edit, retrieval_terms, spoken_years)
+                                         one_edit, retrieval_terms, spoken_years, spoken_artwork_query)
 from live_voice.collections import CollectionDatabase, CollectionMatch, NGA_COLLECTION_ID
 
 
@@ -131,6 +131,43 @@ class ArtworkRetrievalTests(unittest.TestCase):
         self.assertEqual(self.ids('garden apple'),['59127'])
         self.assertEqual(self.ids('unmatched telescope'),[])
 
+    def test_spoken_topic_correction_matches_the_unframed_topic_without_reusing_the_old_artist(self):
+        records = [artwork(100,'Landscapes near a river','Fixture Landscape Artist','1900'),
+                   artwork(101,"I'm Jealous",'Fixture Artist','1901'),
+                   artwork(102,"I'm Christmas",'Fixture Artist','1902')]
+        self.store.import_records(records,collection_id=NGA_COLLECTION_ID,label='National Gallery of Art',source_kind='nga')
+        fresh=self.store.open_snapshot([NGA_COLLECTION_ID])
+        history=[{'role':'user','content':'Show me AgnoloGadi.'},
+                 {'role':'assistant','content':'There are works by Agnolo Gaddi.'}]
+        try:
+            expected=fresh.search('landscapes')
+            self.assertEqual([hit['source_entry_id'] for hit in expected],['100'])
+            for query in ("Uh no, I'm looking for landscapes",'Actually, I am searching for landscapes',
+                          'Okay, we are looking for landscapes','Um, I want to find landscapes'):
+                with self.subTest(query=query):
+                    self.assertEqual(fresh.search(query,history),expected)
+                    self.assertEqual(self.store.page([NGA_COLLECTION_ID],query=query)['entries'],
+                                     self.store.page([NGA_COLLECTION_ID],query='landscapes')['entries'])
+            self.assertEqual([hit['source_entry_id'] for hit in fresh.search('Find the artwork titled "I\'m Jealous"')],['101'])
+            self.assertEqual(catalog._query_terms("Uh no, I'm looking for landscapes",history),{'landscapes'})
+            self.assertEqual(history[0]['content'],'Show me AgnoloGadi.')
+        finally: fresh.close()
+
+    def test_a_facet_followup_can_borrow_a_cleaned_search_without_changing_history_or_the_transcript(self):
+        history=[{'role':'user','content':"Uh, no, I'm looking for Agnolo Gaddi"}]
+        self.assertEqual(self.snapshot.search('What year was it painted?',history),self.snapshot.search('Agnolo Gaddi'))
+        self.assertEqual(history,[{'role':'user','content':"Uh, no, I'm looking for Agnolo Gaddi"}])
+
+    def test_prefixed_spoken_year_is_cleaned_before_both_query_terms_and_year_normalization(self):
+        expected=self.ids('1387')
+        for query in ("I'm looking for thirteen eighty-seven", "Uh no, I'm looking for thirteen eighty-seven"):
+            with self.subTest(query=query):
+                self.assertEqual(catalog._fts_query(query)[0],{'1387'})
+                self.assertEqual(self.ids(query),expected)
+                page=self.store.page([NGA_COLLECTION_ID],query=query)
+                self.assertEqual(page['matched'],3)
+                self.assertEqual([entry['source_entry_id'] for entry in page['entries']],expected)
+
     def test_selected_sources_are_respected_for_exact_and_fuzzy_queries(self):
         self.store.import_records([artwork(100,'The very particular hummingbird','Elisabeth Test','1789')],
                                   collection_id='unselected',label='Not chosen')
@@ -206,6 +243,16 @@ class ArtworkRetrievalTests(unittest.TestCase):
 
 
 class LexicalBoundsTests(unittest.TestCase):
+    def test_spoken_search_cleanup_is_anchored_bounded_and_preserves_literal_titles_and_meaningful_no(self):
+        for query in ("Uh no, I'm looking for landscapes",'Um, I am searching for landscapes',
+                      'Actually, we’re looking for landscapes','Okay, I want to find landscapes'):
+            with self.subTest(query=query): self.assertEqual(spoken_artwork_query(query),'landscapes')
+        for query in ("I'm Jealous",'No Woman No Cry','Find the work called "I\'m Jealous"',
+                      '"I\'m looking for landscapes"','Uh Huh','No, I prefer paintings',
+                      'Tell me why I am looking for landscapes'):
+            with self.subTest(query=query): self.assertEqual(spoken_artwork_query(query),query)
+        self.assertEqual(len(spoken_artwork_query('x'*5000)),4000)
+
     def test_only_one_edit_or_adjacent_transposition_is_permitted(self):
         for first,second in [('gadi','gaddi'),('entrhoned','enthroned'),('madonne','madonna')]:
             self.assertTrue(one_edit(first,second))

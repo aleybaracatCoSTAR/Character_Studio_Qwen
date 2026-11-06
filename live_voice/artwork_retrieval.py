@@ -37,6 +37,21 @@ _SPOKEN = re.compile(r'(?P<century>'+ '|'.join(_CENTURIES) +r')\s*(?:hundred\s*(
                      r'(?P<tens>'+ '|'.join(_TENS) +r')\s*(?P<unit>'+ '|'.join(_UNITS) +r')?')
 _DATE_CONTEXT = re.compile(r'\b(?:from|in|during|before|after|around|circa|dated|date|year|painted|made|created|produced)'
                            r'\s*(?:(?:the|year|of|was|is|about)\s+){0,3}$', re.I)
+_SPOKEN_SEARCH = re.compile(r"^\s*(?:(?:uh|um|erm|er|no|actually|okay|ok)\b[\s,;.!:—–-]*){0,4}"
+    r"(?:(?:i['’]m|i\s+am|we['’]re|we\s+are)\s+(?:looking|searching)\s+for\s+"
+    r"|i\s+want\s+to\s+(?:find|look\s+for|search\s+for)\s+)", re.I)
+
+
+def spoken_artwork_query(query):
+    """Remove only an anchored spoken search lead-in, never a literal title.
+
+    Keep the participant's transcript untouched. A quoted/named title or a
+    standalone 'No'/'I'm Jealous' does not match this explicit search clause.
+    """
+    if not isinstance(query, str): raise ValueError('Use a plain-text collection question.')
+    query = query.strip()[:4000]
+    match = _SPOKEN_SEARCH.match(query)
+    return query[match.end():].strip() if match else query
 
 
 def fold(value):
