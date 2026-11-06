@@ -10,6 +10,9 @@ The reported NGA example is now a regression case:
 | `Madonne and Child Entrhoned with Twelve Angels` | NGA object **3**, *Madonna and Child Enthroned with Twelve Angels, and with the Blessing Christ [middle panel]* |
 | `thirteen eighty-seven` | Artwork dates containing **1387**, including the Gaddi triptych panels; numbers in accession codes or unrelated prose do not take priority |
 | `Show me the image` | Images from the most recently presented artwork candidates in this call, directly in the chat |
+| `Uh can you show show them to me` or `Uh, can you show me pictures of them` | The same current records, without searching the filler or pronouns as a new topic |
+| `Yes, please` after an image offer | The supplied artwork named in that offer; a general yes without an image offer does not become a display command |
+| `I can’t see it` | Re-send the current image cards; keep catalogue records and source links even if an image cannot load |
 | `Show me an image of Water Lilies by Monet` | A fresh search for the named work, rather than an old conversation image |
 
 The exact middle panel's source image is [provided by NGA](https://api.nga.gov/iiif/abec1c5b-ee32-450d-9398-5c84f1f8cf14/full/!200,200/0/default.jpg). Its record identifies Agnolo Gaddi, shortly before 1387, tempera on poplar panel. A date or artist alone does not uniquely identify this panel, so multiple legitimate matches stay distinct. The actor is instructed to retain canonical source spellings and ask for confirmation when a spelling or result is ambiguous, rather than treating the transcription as a new artist.
@@ -19,6 +22,18 @@ The exact middle panel's source image is [provided by NGA](https://api.nga.gov/i
 An explicit image request produces inline cards with the artwork title, artist/date/medium, collection, rights and source link. **Open image** opens the image in a separate browser view when clicked; NGA thumbnail links use a larger 1,200-pixel IIIF view. Voice commands display cards without attempting an automatically opened browser popup. Several possible works produce several labelled candidates; a missing source image gets a clear message rather than an invented or substituted image. The current image stays visible while the reply text streams.
 
 The image action happens when catalogue evidence is retrieved. It does not wait for voice generation, and a later voice failure does not remove an already displayed card. Earlier image cards remain in the conversation. Switching characters or starting a new call clears their state. A brief “thanks” does not discard the artwork reference; a failed new named-artwork search does, so the next image request cannot silently resurrect the old artwork.
+
+Natural confirmations use a separate call-local offer state. Only a successfully published actor reply can offer known, supplied catalogue records; an invented title or actor-written URL cannot select an unrelated image. A new topic clears the previous offer. “How does it look like?” and similar pronoun descriptions reuse the current source metadata/assistive description rather than searching those generic words. This is still text evidence, not vision.
+
+The browser reports bounded image loading results to the server without starting another reply. The next actor/director prompt can distinguish a provided URL, a requested display, a successfully loaded image and a load failure. Normal archive prompts also state that this application can display available images, so the actor is not told to deny that capability. Server status advertises `artwork_images: dialogue-v2`; an older server is identified in the UI as needing a restart after updating.
+
+## Records that have no image link
+
+These are different cases: a work not found, a known work with no imported image URL, and an existing image that failed to load. The interface now retains catalogue cards for all known records, even when they have no image URL. Those cards show **No image link in this imported record** plus their original museum source; there is no invented Open image link.
+
+In the pinned NGA import, **Queer Birds** by Leon Bibel (object 146279), **Queer House** by Norman Kent (42831) and **Queer Fish** by Mabel Dwight (147406) are present but have `image_url=None`. By contrast, Pennell's **The Shops at Night, Changing Shifts** (9616) and **Rainy Night, Charing Cross Shops** (41308/119977) have image links. This describes the imported data, not whether every original museum webpage contains an image.
+
+![Known NGA records without imported images; labelled scripted interface test](screenshots/known-works-no-images.jpg)
 
 The image intent uses the same finalized transcript path for microphone and text input. It introduces no extra LLM request or image generation. Neither the character actor nor director receives image pixels; their fixed guidance describes the UI action and limits claims to the supplied catalogue text.
 

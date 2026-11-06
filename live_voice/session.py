@@ -17,7 +17,8 @@ from .turns import ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
 from .archive import retrieve, grounding_messages
 from .collections import collection_grounding_messages
-from .artwork_requests import image_request, image_context, image_reference_ack
+from .artwork_requests import (image_request, image_context, image_reference_ack,
+    image_confirmation, image_offer, image_reference_question, image_capability_context)
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,36 @@ class LiveSession:
         self.archive_search = archive_search if self.archive else None
         self.last_archive_context = None
         self.last_archive_matches = []
+        self.pending_image_offer = []
+        self.image_display = None
+
+    def image_status(self, value):
+        """Accept bounded current-request browser feedback without starting a reply."""
+        if not isinstance(value,dict) or self.closed or self.image_display is None: return False
+        turn, loaded, total = value.get('turn_id'), value.get('loaded_count'), value.get('total_count')
+        status = value.get('status')
+        if (type(turn) is not int or turn!=self.turn_id or turn!=self.image_display['turn_id']
+                or type(loaded) is not int or type(total) is not int or not 0<=loaded<=total<=3
+                or total!=self.image_display['total_count']
+                or status not in ('loading','loaded','unavailable')
+                or status=='loading' and (loaded!=0 or total==0)
+                or status=='loaded' and loaded==0
+                or status=='unavailable' and loaded!=0): return False
+        previous = self.image_display['status']
+        # A delayed loading/error notification cannot erase a successful load.
+        if previous=='loaded' and (status!='loaded' or loaded<self.image_display['loaded_count']): return False
+        self.image_display.update(status=status,loaded_count=loaded)
+        return True
+
+    @staticmethod
+    def _image_keys(matches):
+        return {(match.get('collection_id','qtm'),match.get('id')) for match in matches if isinstance(match,dict)}
+
+    def _image_state_for(self,matches):
+        state = self.image_display
+        if state is None: return None
+        keys = self._image_keys(matches)
+        return state['status'] if keys and keys.issubset(state['keys']) else None
 
     async def story_state(self):
         if self.story.revision != self.story_seen_revision:
@@ -313,19 +344,30 @@ class LiveSession:
             if self.archive:
                 scope = self.archive.scope
                 requested_image = image_request(text) if not action else None
+                offered = copy.deepcopy(self.pending_image_offer)
+                self.pending_image_offer = []
+                confirmed = not action and not requested_image and offered and image_confirmation(text)
+                if confirmed: requested_image = {'query':'','followup':True}
+                reference_followup = (not action and bool(self.last_archive_matches)
+                    and (image_reference_ack(text) or image_confirmation(text) or image_reference_question(text)))
                 search_text = requested_image['query'] if requested_image and not requested_image['followup'] else text
                 search_history = () if requested_image else director_context
+                reuse = bool(requested_image and requested_image['followup'] or reference_followup)
+                previous_matches = offered if confirmed else self.last_archive_matches
                 if scope == 'library':
                     if self.archive_search is None: raise ValueError('The local archive snapshot is unavailable.')
-                    matches = (copy.deepcopy(self.last_archive_matches) if requested_image and requested_image['followup']
+                    matches = (copy.deepcopy(previous_matches) if reuse
                                else await asyncio.to_thread(self.archive_search.search, search_text, search_history))
                     count = self.archive_search.count
                 else:
-                    matches = (copy.deepcopy(self.last_archive_matches) if requested_image and requested_image['followup']
+                    matches = (copy.deepcopy(previous_matches) if reuse
                                else retrieve(self.archive_entries, search_text, search_history))
                     count = len(self.archive_entries)
                 archive_context = (collection_grounding_messages(matches) if self.archive.collection_ids
                                    else grounding_messages(matches, scope=scope))
+                if self.archive.collection_ids:
+                    archive_context[0] = {**archive_context[0], 'content':archive_context[0]['content']+'\n\n'+
+                        image_capability_context(matches,state=self._image_state_for(matches))}
                 if requested_image:
                     archive_context.append({'role':'system','content':image_context(requested_image,matches)})
                 self.last_archive_context = archive_context
@@ -334,6 +376,10 @@ class LiveSession:
                 if self.archive.collection_ids: source_event['collection_ids'] = self.archive.collection_ids
                 if requested_image: source_event['image_request'] = True
                 await self.send_json(source_event)
+                if requested_image:
+                    self.image_display = {'turn_id':turn_id,'keys':self._image_keys(matches),
+                        'total_count':sum(bool(match.get('image_url')) for match in matches[:3]),
+                        'loaded_count':0,'status':'sent'}
                 # Only published references become the next visual referent.
                 # A brief acknowledgement does not replace the artwork topic.
                 if matches or requested_image or not image_reference_ack(text):
@@ -425,6 +471,10 @@ class LiveSession:
             reply = spoken_text_clean("".join(answer)).strip()
             if not reply: raise RuntimeError("The text model returned no spoken reply.")
             await self.send_json({'type':'text_done','turn_id':turn_id,'text':reply})
+            if self.archive:
+                offered_keys = image_offer(reply,matches)
+                self.pending_image_offer = (copy.deepcopy([match for match in matches
+                    if (match.get('collection_id','qtm'),match.get('id')) in offered_keys]) if offered_keys else [])
 
             # One utterance gives Drama 3 the whole reply's prosody. Repeated
             # sentence requests can drift even with identical emotion labels.
@@ -542,6 +592,8 @@ class LiveSession:
         self.archive_entries = ()
         self.last_archive_context = None
         self.last_archive_matches = []
+        self.pending_image_offer = []
+        self.image_display = None
         if self.story_director_task:
             self.story_director_task.cancel();await asyncio.gather(self.story_director_task,return_exceptions=True)
         if self.story_task:

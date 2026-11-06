@@ -402,6 +402,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 "model_inspection":True,
                 "inspection_download":True,
                 "character_presets":True, "archive_collections":True,
+                "artwork_images":"dialogue-v2", "image_status":True,
                 "archive":({"available":True,"scope":"library","limit":MAX_DATABASE_ENTRIES,
                             "selection_limit":50,"bulk_import":True} if isinstance(archive_store,ArchiveDatabase)
                            else {"available":True,"scope":"selected","limit":50}),
@@ -554,6 +555,7 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                 listener = ListeningSession(experimental,detector.is_speech,on_start=input_started,
                     on_partial=input_partial,on_endpoint=input_endpoint,on_final=input_final,on_error=input_error)
             await send_json({"type":"ready", "sample_rate":16000, "output_rate":44100,
+                             "artwork_images":"dialogue-v2", "image_status":True,
                              "endpoint_ms":300 if experimental is not None else detector.silence_frames * 20,
                              "turn_taking":("Speak to interrupt; Stop reply remains available" if interruptions
                                             else "Stop reply to interrupt; mic resumes after playback"),
@@ -599,6 +601,10 @@ def create_app(preview=False, providers=None, vad_factory=None, archive_store=No
                     if not isinstance(command, dict): raise ValueError("Invalid control message.")
                     if command.get("type") == "inspect":
                         await session.inspection.subscribe(command.get('enabled'))
+                    elif command.get('type') == 'image_status':
+                        # Browser rendering feedback updates the next prompt;
+                        # it never starts speech or an additional model call.
+                        session.image_status(command)
                     elif command.get('type') == 'interruptions':
                         enabled = command.get('enabled')
                         if type(enabled) is not bool: raise ValueError('Invalid interruption setting.')

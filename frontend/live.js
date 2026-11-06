@@ -17,6 +17,7 @@ const fields=['name','role','about','goal','environment','voice_style','rules','
 let socket=null,context=null,stream=null,capture=null,playback=null,connecting=false,muted=false,ready=false,currentTurn=0;
 let replyPending=false,resumeTimer=null;
 let interruptionsSupported=false,interruptionsPermitted=false;
+let imageStatusSupported=false;
 let referenceURL=null;
 let triggerActive=false;
 let sessionReady=false,disconnecting=null;
@@ -26,7 +27,8 @@ const conversation=new Conversation($('messages'),$('empty-state'));
 const callFeedback=new CallFeedback($('feedback'));
 const inspector=new PromptInspector({document,send});
 const archivePanel=new ArchivePanel({document,onChange:()=>saveActiveProfile()});
-const artworkChat=new ArtworkChat({document,container:$('messages'),empty:$('empty-state')});
+const artworkChat=new ArtworkChat({document,container:$('messages'),empty:$('empty-state'),
+  onImageStatus:value=>{if(imageStatusSupported&&socket?.readyState===WebSocket.OPEN)send(value);}});
 const listeningFeedback=new ListeningFeedback({label:$('listening-mode'),partial:$('listening-partial'),
   onFinalizing:()=>{holdMicrophone();state('Finishing recognition… · Mic paused');},
   onListening:()=>{if(bargeIn.pending||replyPending&&bargeIn.isSuppressed(currentTurn))return;if(replyPending)resumeMicrophone();else state('Listening…');},
@@ -209,6 +211,7 @@ async function disconnect(){
   inspector.setConnected(false);
   archivePanel.resetSources();
   artworkChat.disconnect();
+  imageStatusSupported=false;
   listeningFeedback.reset();
   bargeIn.reset();interruptionsPermitted=false;
   voiceRetry.clear();
@@ -250,7 +253,7 @@ function event(data){
     else if(data.action==='hold')$('trigger-state').textContent=(triggerActive?'Reaction continues':'Normal state')+(data.evidence?` · ${data.evidence}`:'');
     state('Thinking… · Mic paused');return;
   }
-  if(data.type==='ready'){listeningFeedback.setMode(data.listening_mode);sessionReady=true;interruptionsPermitted=data.interruptions===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
+  if(data.type==='ready'){listeningFeedback.setMode(data.listening_mode);sessionReady=true;imageStatusSupported=data.image_status===true;interruptionsPermitted=data.interruptions===true;bargeIn.configure({enabled:$('allow-interruptions').checked,permitted:interruptionsPermitted});inspector.setConnected(true);state(stream?'Listening…':'Ready for a typed message');controls();return;}
   if(data.type==='speech_start'){state('Listening…');return;}
   if(data.type==='listening'){state('Listening…');return;}
   if(data.type==='turn_start'){if(!voiceProgress.begin(data.turn_id))return;bargeIn.begin(data.turn_id);listeningFeedback.clear();callFeedback.clearVoiceNotice();holdMicrophone();currentTurn=data.turn_id;archivePanel.setTurn(currentTurn);artworkChat.setTurn(currentTurn);playback.setTurn(currentTurn);state(data.voice_retry?'Retrying voice… · Mic paused':'Understanding… · Mic paused');return;}
@@ -425,6 +428,8 @@ async function status(){
       ?interruptionsSupported&&$('allow-interruptions').checked?'Speak and pause to hear a reply. With Allow interruptions on, speak over the character or use Stop reply.':'Speak and pause to hear a reply. Use Stop reply to take over while the character is speaking.'
       :data.stt_error||Object.entries(data.services).map(([name,ok])=>`${name.toUpperCase()}: ${ok?'ready':'not ready'}`).join(' · ');
     if(data.busy&&!socket){ready=false;$('mode-note').textContent='Another voice session is active. End that call before starting a new one.';}
+    else if(archivePanel.enabled&&archivePanel.collectionIds.length&&data.artwork_images!=='dialogue-v2')
+      $('mode-note').textContent+=' Restart the updated studio server to enable reliable image requests.';
     if(data.models)$('director-model').textContent=`${data.profile} · Actor: ${data.models.actor.split('/').pop()} · Director: ${data.models.director.split('/').pop()}${data.director.shared_model?' (shared server)':''}`;
     controls();
   }catch(error){ready=false;$('status').textContent='Server disconnected';controls();}

@@ -13,6 +13,7 @@ from live_voice.app import create_app
 from live_voice.archive import ArchiveSettings
 from live_voice.archive_database import ArchiveDatabase
 from live_voice.collection_catalog import CollectionCatalog
+from live_voice.artwork_requests import image_capability_context
 from live_voice.collections import CollectionDatabase, collection_grounding_messages
 from live_voice.director import DirectorPlan
 from live_voice.presets import CharacterPreset, preset
@@ -184,6 +185,7 @@ class CollectionAPITests(CollectionFixture):
                 self.assertEqual(sources['collection_ids'],['national-gallery-of-art'])
                 self.assertEqual(sources['matches'][0]['metadata']['artist'],'Claude Monet')
                 expected = collection_grounding_messages(sources['matches'])
+                expected[0]['content'] += '\n\n'+image_capability_context(sources['matches'])
                 self.assertEqual(providers.actor_contexts,[expected])
                 self.assertEqual(providers.director_contexts,[expected])
                 self.assertIn('not mean you have seen',expected[0]['content'])
