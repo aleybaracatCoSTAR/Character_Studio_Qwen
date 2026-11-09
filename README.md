@@ -1,5 +1,9 @@
 # Character Studio · Qwen
 
+**Developer architecture handoff:** [Current models, APIs, storage and the proposed container deployment](docs/DEVELOPER_ARCHITECTURE.md). Includes editable Mermaid diagrams for the current Drama pipeline, native Omni alternative and separate frontend/backend target. Container packaging and the application-level OpenAI-compatible facade are specified work, not an implemented deployment.
+
+**Gallery browsing context:** requests such as “colorful paintings with pictures” retain their subject and medium through “Any luck?” and “Um.” Image/medium filters run before the top three results; more results exclude already shown works, and image failures exclude the affected selection. Exact named Met/Getty requests retain bounded official image resolution. CPU fixtures validate this behaviour; real-model adherence still needs checking.
+
 **Unity demo (`unity-demo` branch):** the [Robin Unity package](unity/README.md) adds a separate gallery scene, microphone/text conversation, retrieved artwork textures and a comparison panel for Drama 3 and streaming Qwen3-Omni. The GPU services and archive databases stay on the existing server.
 
 **Lower-delay Drama 3 playback:** the live app now plays audio as it arrives, with one voice and emotion per complete reply. Full-take checking remains available via `LIVE_VOICE_PLAYBACK=checked`; streaming checks run after release and incomplete audio never restarts automatically. [Mode and restart details](docs/DRAMA3_LATENCY.md#live-playback-mode).

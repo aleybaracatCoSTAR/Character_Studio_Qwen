@@ -1,0 +1,20 @@
+flowchart LR
+  Visitor["Participant microphone or typed input"] --> UI["Browser UI: Character Studio or gallery"]
+  UI -->|"custom WebSocket /api/live"| App["FastAPI orchestrator: CPU, port 18091"]
+  App --> Listen["Baseline CPU: Faster-Whisper base.en, 74M; WebRTC VAD"]
+  Listen --> Context["Character sheet, heard history and retrieved evidence"]
+  Data["SQLite archive and museum catalogues: FTS5 plus tolerant search"] --> Context
+  Context --> Director["Third H200: Qwen3-32B director, 32.8B dense"]
+  Director -->|"same-turn plan, emotion and beat guidance"| Route{"Selected serving profile"}
+  Context --> Route
+  Route -->|"Qwen plus Drama 3"| Actor["Second H200: Qwen3-30B-A3B-Instruct-2507; 30.5B total, 3.3B active"]
+  Actor -->|"complete reply text and one delivery cue"| Fish["First H200: Fish Drama 3; 35B MoE, 3B active backbone plus decoder"]
+  Fish -->|"streamed 44.1 kHz PCM"| App
+  Route -->|"native alternative"| Thinker["First H200: Qwen3-Omni Thinker; about 30B total, 3B active plus encoders"]
+  UI -.->|"recorded microphone audio via app"| Thinker
+  Thinker --> Talker["Second H200: Qwen3-Omni Talker 3B, 0.3B active; Code2Wav about 200M"]
+  Talker -->|"streamed text and 24 kHz PCM"| App
+  App -->|"text, sources, images and audio"| UI
+  UI -->|"played and playback_done acknowledgements"| App
+  Optional["Optional listener: Nemotron 0.6B shares third H200; Smart Turn on CPU"] -.-> Listen
+  Rule["One three-GPU stack at a time. Both are turn-based with barge-in, not continuous full duplex."] -.-> Route

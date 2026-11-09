@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1000" viewBox="0 0 1400 1000">
+<rect width="100%" height="100%" fill="white"/>
+<text x="55" y="52" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="46" font-weight="700" fill="#20272c">PROPOSED · Separate frontend and backend</text>
+<text x="55" y="104" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#44535d">Deployment target only: container packaging is not implemented yet</text>
+<rect x="55" y="160" width="520" height="145" rx="18" fill="#fff4dc" stroke="#647782" stroke-width="2"/>
+<text x="315.0" y="191.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Frontend container</text>
+<text x="315.0" y="232.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Static UI + reverse proxy</text>
+<text x="315.0" y="273.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">One public browser origin</text>
+<rect x="825" y="160" width="520" height="145" rx="18" fill="#fff4dc" stroke="#647782" stroke-width="2"/>
+<text x="1085.0" y="191.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Backend container</text>
+<text x="1085.0" y="232.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">FastAPI + sessions + RAG</text>
+<text x="1085.0" y="273.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">CPU recognition / turn logic</text>
+<polyline points="575,232 825,232" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="825,232 812.0,224.85 812.0,239.15" fill="#647782"/>
+<text x="700" y="200" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="400" fill="#44535d">API + WebSocket</text>
+<rect x="55" y="365" width="1290" height="315" rx="22" fill="#fafbfc" stroke="#a5b2bb" stroke-width="2"/>
+<text x="80" y="400" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="700" fill="#44535d">PRIVATE MODEL SERVICES</text>
+<rect x="80" y="480" width="390" height="165" rx="18" fill="#e9f0fb" stroke="#647782" stroke-width="2"/>
+<text x="275.0" y="521.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Actor service</text>
+<text x="275.0" y="562.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Qwen3-30B-A3B</text>
+<text x="275.0" y="603.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Second allocated H200</text>
+<rect x="505" y="480" width="390" height="165" rx="18" fill="#e9f0fb" stroke="#647782" stroke-width="2"/>
+<text x="700.0" y="521.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Director service</text>
+<text x="700.0" y="562.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Qwen3-32B</text>
+<text x="700.0" y="603.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Third allocated H200</text>
+<rect x="930" y="480" width="390" height="165" rx="18" fill="#f9eee5" stroke="#647782" stroke-width="2"/>
+<text x="1125.0" y="521.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">TTS service</text>
+<text x="1125.0" y="562.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Drama 3 + decoder</text>
+<text x="1125.0" y="603.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">First allocated H200</text>
+<polyline points="1085,305 1085,440 275,440" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="275,440 275,480" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="275,480 282.15,467.0 267.85,467.0" fill="#647782"/>
+<polyline points="700,440 700,480" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="700,480 707.15,467.0 692.85,467.0" fill="#647782"/>
+<polyline points="1085,440 1125,440 1125,480" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1125,480 1132.15,467.0 1117.85,467.0" fill="#647782"/>
+<rect x="55" y="765" width="615" height="115" rx="18" fill="#e9f4ef" stroke="#647782" stroke-width="2"/>
+<text x="362.5" y="802.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Persistent backend volume</text>
+<text x="362.5" y="843.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">SQLite + imports + source provenance</text>
+<rect x="730" y="765" width="615" height="115" rx="18" fill="#e9f4ef" stroke="#647782" stroke-width="2"/>
+<text x="1037.5" y="781.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Mounted model storage</text>
+<text x="1037.5" y="822.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Read-only weights</text>
+<text x="1037.5" y="863.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Separate writable cache</text>
+<polyline points="825,272 700,272 700,340 30,340 30,822 55,822" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="55,822 42.0,814.85 42.0,829.15" fill="#647782"/>
+<polyline points="1040,765 1040,720 275,720" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="1040,720 1125,720" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="275,720 275,645" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="275,645 267.85,658.0 282.15,658.0" fill="#647782"/>
+<polyline points="700,720 700,645" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="700,645 692.85,658.0 707.15,658.0" fill="#647782"/>
+<polyline points="1125,720 1125,645" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1125,645 1117.85,658.0 1132.15,658.0" fill="#647782"/>
+<text x="55" y="930" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="400" fill="#44535d">Optional profiles: Nemotron listener or native Omni replacing actor + TTS.</text>
+<text x="55" y="971" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="400" fill="#44535d">Compose on approved hosts; cluster-approved containers inside Slurm on Surrey.</text>
+</svg>

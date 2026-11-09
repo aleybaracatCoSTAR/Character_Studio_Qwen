@@ -186,8 +186,18 @@ class CollectionAPITests(CollectionFixture):
                 self.assertEqual(sources['matches'][0]['metadata']['artist'],'Claude Monet')
                 expected = collection_grounding_messages(sources['matches'])
                 expected[0]['content'] += '\n\n'+image_capability_context(sources['matches'])
-                self.assertEqual(providers.actor_contexts,[expected])
-                self.assertEqual(providers.director_contexts,[expected])
+                self.assertEqual(len(providers.actor_contexts),1)
+                actual = providers.actor_contexts[0]
+                # The same complete context reaches both models. Browsing adds
+                # bounded intent/status beside the unchanged source records.
+                self.assertEqual(providers.director_contexts,[actual])
+                self.assertEqual(actual[0],expected[0])
+                payload = json.loads(actual[1]['content'])
+                self.assertEqual(payload['references'],json.loads(expected[1]['content'])['references'])
+                self.assertEqual(payload['browsing']['query'],'Monet')
+                self.assertEqual(payload['browsing']['matching_records'],len(sources['matches']))
+                self.assertTrue(payload['browsing']['images_requested'])
+                self.assertIn('No background catalogue search continues',actual[-1]['content'])
                 self.assertIn('not mean you have seen',expected[0]['content'])
                 socket.send_json({'type':'stop'})
 

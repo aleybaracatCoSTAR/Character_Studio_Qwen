@@ -188,14 +188,41 @@ test('selecting a keyboard-focused thumbnail restores the matching button and ra
   nodes.record.focus();gallery.renderThumbs();assert.equal(document.activeElement,nodes.record);
 });
 
-test('repeating a failed unchanged image does not leave a fresh request waiting for a browser event that cannot fire',()=>{
+test('a new explicit image request retries a transient failure once instead of keeping the failed cache forever',()=>{
   for(const repeat of [entry(),entry('b'.repeat(32),{title:'Another record sharing the failed image URL'})]){
-    const {gallery,failed,statuses,document}=setup();gallery.setTurn(1);gallery.accept(source(),[entry()]);failed();
+    const {gallery,failed,loaded,statuses,document,reveal}=setup();gallery.setTurn(1);gallery.accept(source(),[entry()]);failed();
     assert.equal(statuses.at(-1).status,'unavailable');gallery.setTurn(2);gallery.accept(source(2),[repeat]);
-    assert.deepEqual(statuses.at(-1),{type:'image_status',turn_id:2,status:'unavailable',loaded_count:0,total_count:1});
-    assert.equal(document.getElementById('gallery-empty').hidden,false);
-    assert.match(document.getElementById('gallery-empty').textContent,/could not be loaded/);
+    assert.equal(reveal.shows.length,2);
+    assert.deepEqual(statuses.at(-1),{type:'image_status',turn_id:2,status:'loading',loaded_count:0,total_count:1});
+    assert.equal(document.getElementById('gallery-empty').hidden,true);
+    gallery.accept(source(2),[repeat]);assert.equal(reveal.shows.length,2);
+    loaded();assert.equal(statuses.at(-1).status,'loaded');assert.equal(document.getElementById('gallery-image').parentNode.hidden,false);
   }
+});
+
+test('a failed retry does not spin on duplicate source events but a later explicit request can retry again',()=>{
+  const {gallery,failed,statuses,reveal}=setup();gallery.setTurn(1);gallery.accept(source(),[entry()]);failed();
+  gallery.setTurn(2);gallery.accept(source(2),[entry()]);failed();assert.equal(reveal.shows.length,2);
+  gallery.accept(source(2),[entry()]);assert.equal(reveal.shows.length,2);assert.equal(statuses.at(-1).status,'unavailable');
+  gallery.setTurn(3);gallery.accept(source(3,{image_request:false,gallery_display:true}),[entry()]);
+  assert.equal(reveal.shows.length,2);assert.equal(statuses.at(-1).status,'unavailable');
+  gallery.setTurn(4);gallery.accept(source(4),[entry()]);assert.equal(reveal.shows.length,3);
+});
+
+test('a load event from the previous selected source cannot mark a different URL as loaded',()=>{
+  const {gallery,statuses,image,loaded,document}=setup();gallery.setTurn(1);gallery.accept(source(),[entry()]);loaded();
+  const oldURL=image.src;gallery.setTurn(2);
+  gallery.accept(source(2),[entry('b'.repeat(32),{image_url:'https://museum.example/second.jpg'})]);
+  image.currentSrc=oldURL;const before=statuses.length;loaded();assert.equal(statuses.length,before);
+  assert.equal(document.getElementById('gallery-replay').disabled,true);
+  image.currentSrc=image.src;loaded();assert.equal(statuses.at(-1).status,'loaded');assert.equal(statuses.at(-1).turn_id,2);
+});
+
+test('a late error after a settled load cannot hide the displayed artwork or report it unavailable',()=>{
+  const {gallery,statuses,image,loaded,document}=setup();gallery.setTurn(1);gallery.accept(source(),[entry()]);loaded();
+  const before=statuses.length;image.emit('error');assert.equal(statuses.length,before);
+  assert.equal(image.parentNode.hidden,false);assert.equal(document.getElementById('gallery-empty').hidden,true);
+  assert.equal(document.getElementById('gallery-replay').disabled,false);
 });
 
 test('only current explicit image requests publish display statuses; browsing does not send hidden model turns',()=>{
@@ -321,4 +348,23 @@ test('same candidates in a new rank preserve the server-confirmed central artwor
   // An injected selection outside these records never opens an arbitrary URL.
   gallery.setTurn(3);gallery.accept(source(3,{gallery_display:true,gallery_selected:{collection_id:'other',id:'private'}}),[first,second]);
   assert.equal(document.getElementById('gallery-title').textContent,second.title);
+});
+
+
+test('a selected metadata-only record reports its own missing link without marking other candidate images unavailable',()=>{
+  const {gallery,statuses,document}=setup();gallery.setTurn(1);
+  const available=entry(),missing=entry('b'.repeat(32),{title:'Record without an image',image_url:null});
+  gallery.accept(source(1,{gallery_display:true,gallery_selected:{collection_id:missing.collection_id,id:missing.id}}),[available,missing]);
+  assert.deepEqual(statuses,[{type:'image_status',turn_id:1,status:'unavailable',loaded_count:0,total_count:0,
+    selected:{collection_id:missing.collection_id,id:missing.id}}]);
+  assert.equal(document.getElementById('gallery-title').textContent,missing.title);
+  assert.equal(document.getElementById('gallery-image').parentNode.hidden,true);
+});
+
+test('all metadata-only gallery results send a single identity-specific zero-image status',()=>{
+  const {gallery,statuses}=setup();gallery.setTurn(1);
+  const first=entry('a'.repeat(32),{image_url:null}),selected=entry('b'.repeat(32),{image_url:null});
+  gallery.accept(source(1,{gallery_display:true,gallery_selected:{collection_id:selected.collection_id,id:selected.id}}),[first,selected]);
+  assert.deepEqual(statuses,[{type:'image_status',turn_id:1,status:'unavailable',loaded_count:0,total_count:0,
+    selected:{collection_id:selected.collection_id,id:selected.id}}]);
 });

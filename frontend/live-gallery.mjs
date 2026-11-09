@@ -24,7 +24,7 @@ export class ArchiveGallery{
   constructor({document,fetcher=(...args)=>fetch(...args),collections=()=>[],onImageStatus=()=>{},onIntroduce=()=>false,revealFactory=options=>new PixelateReveal(options)}){
     this.document=document;this.fetcher=fetcher;this.collections=collections;this.onImageStatus=onImageStatus;
     this.onIntroduce=onIntroduce;this.visitorName='';this.pendingName='';
-    this.records=[];this.selected=null;this.turnId=0;this.request=null;this.searchEpoch=0;this.imageEpoch=0;this.controller=null;this.disposed=false;
+    this.records=[];this.selected=null;this.turnId=0;this.request=null;this.failedImageURL='';this.imageRetryStamp='';this.searchEpoch=0;this.imageEpoch=0;this.controller=null;this.disposed=false;
     this.mount();
     this.reveal=revealFactory({image:this.get('gallery-image'),canvas:this.get('gallery-canvas')});
     this.get('gallery-replay').addEventListener('click',()=>this.reveal.replay());
@@ -105,9 +105,9 @@ export class ArchiveGallery{
     column.append(welcome,conversation);main.className='gallery-shell';main.replaceChildren(rail,stage,column);
   }
   setTurn(id){if(Number.isSafeInteger(id)&&id>0&&id>=this.turnId){this.turnId=id;this.request=null;}}
-  disconnect(){this.turnId=0;this.request=null;}
+  disconnect(){this.turnId=0;this.request=null;this.imageRetryStamp='';}
   reset(){
-    this.searchEpoch++;this.controller?.abort();this.imageEpoch++;this.imageCleanup?.();this.reveal.clear();this.turnId=0;this.request=null;this.selected=null;this.records=[];
+    this.searchEpoch++;this.controller?.abort();this.imageEpoch++;this.imageCleanup?.();this.reveal.clear();this.turnId=0;this.request=null;this.selected=null;this.records=[];this.failedImageURL='';this.imageRetryStamp='';
     this.get('gallery-thumbnails').replaceChildren();this.get('gallery-image').removeAttribute('src');this.get('gallery-image').hidden=true;
     this.get('gallery-canvas').hidden=true;this.get('gallery-image').parentNode.hidden=true;this.get('gallery-empty').hidden=false;this.get('gallery-replay').disabled=true;
     this.get('gallery-title').textContent='A closer look';this.get('gallery-title').title='';this.get('gallery-title').removeAttribute('data-long-title');this.get('gallery-description').textContent='Choose an artwork to see its catalogue details and original museum source.';
@@ -135,8 +135,9 @@ export class ArchiveGallery{
     // updates and duplicate source events never replay the animation.
     this.searchEpoch++;this.controller?.abort();
     this.get('gallery-search-status').textContent=`${records.length} record${records.length===1?'':'s'} retrieved in this conversation`;
-    this.request=event.image_request===true||event.gallery_display===true?{turn:this.turnId,keys:new Set(records.filter(item=>item.image_url).map(key)),selectedIdentity:event.gallery_display===true,last:''}:null;
-    if(this.request&&!this.request.keys.size){try{this.onImageStatus({type:'image_status',turn_id:this.turnId,status:'unavailable',loaded_count:0,total_count:0});}catch(error){}}
+    this.request=event.image_request===true||event.gallery_display===true?{turn:this.turnId,keys:new Set(records.map(key)),
+      imageKeys:new Set(records.filter(item=>item.image_url).map(key)),selectedIdentity:event.gallery_display===true,
+      retryFailed:event.image_request===true,last:''}:null;
     this.add(records);
     const selectedKey=event.gallery_selected;
     const selected=records.find(item=>selectedKey&&item.collection_id===selectedKey.collection_id&&item.id===selectedKey.id)
@@ -172,17 +173,32 @@ export class ArchiveGallery{
     this.get('gallery-caption').textContent=entry.title;
     const image=this.get('gallery-image'),empty=this.get('gallery-empty'),picture=image.parentNode;
     if(!entry.image_url){this.imageEpoch++;this.imageCleanup?.();this.reveal.clear();picture.hidden=true;empty.hidden=false;empty.replaceChildren(this.node('span','gallery-kicker','CATALOGUE RECORD'),this.node('h1','',entry.title),this.node('p','','No image link is available in this imported record. You can still explore its details or open the museum source.'));this.get('gallery-replay').disabled=true;this.report(entry,'unavailable');return true;}
-    if(same&&image.complete&&image.naturalWidth){this.report(entry,'loaded');return true;}
-    if(same&&image.complete&&!image.naturalWidth){this.report(entry,'unavailable');return true;}
-    if(same&&!image.complete){this.report(entry,'loading');return true;}
+    const url=artworkImageViewURL(entry.image_url)||displayArchiveImageURL(entry.image_url);
+    const normalized=value=>{try{return new URL(value,this.document.baseURI).href;}catch{return String(value||'');}};
+    const expected=normalized(url);
+    const current=()=>normalized(image.currentSrc||image.src)===expected;
+    const requested=()=>normalized(image.src)===expected;
+    const retryStamp=String(this.turnId)+':'+expected;
+    // A later explicit "show it again" may retry a failed museum request once.
+    // Duplicate retrieval events cannot spin on the same unavailable URL.
+    const retry=Boolean(this.request?.retryFailed&&this.failedImageURL===expected&&this.imageRetryStamp!==retryStamp);
+    if(retry){this.imageRetryStamp=retryStamp;image.removeAttribute('src');}
+    const showLoaded=()=>{picture.hidden=false;image.hidden=false;empty.hidden=true;this.get('gallery-replay').disabled=false;this.failedImageURL='';this.report(entry,'loaded');};
+    const showFailed=()=>{picture.hidden=true;empty.hidden=false;empty.replaceChildren(this.node('span','gallery-kicker','IMAGE UNAVAILABLE'),this.node('h1','',entry.title),this.node('p','','The museum image could not be loaded. Its catalogue details and original source are still available.'));this.get('gallery-replay').disabled=true;this.failedImageURL=expected;this.report(entry,'unavailable');};
+    if(!retry&&same&&requested()){
+      if(image.complete&&image.naturalWidth&&image.naturalHeight&&current()){showLoaded();return true;}
+      if(image.complete&&!image.naturalWidth&&current()){showFailed();return true;}
+      if(!image.complete){this.report(entry,'loading');return true;}
+    }
     const epoch=++this.imageEpoch;picture.hidden=false;image.hidden=false;empty.hidden=true;this.get('gallery-replay').disabled=true;
-    const loaded=()=>{if(epoch!==this.imageEpoch||this.disposed)return;this.get('gallery-replay').disabled=false;this.report(entry,'loaded');};
-    const failed=()=>{if(epoch!==this.imageEpoch||this.disposed)return;picture.hidden=true;empty.hidden=false;empty.replaceChildren(this.node('span','gallery-kicker','IMAGE UNAVAILABLE'),this.node('h1','',entry.title),this.node('p','','The museum image could not be loaded. Its catalogue details and original source are still available.'));this.get('gallery-replay').disabled=true;this.report(entry,'unavailable');};
+    let settled=false;
+    const active=()=>epoch===this.imageEpoch&&!this.disposed&&this.selected===id&&requested()&&current();
+    const loaded=()=>{if(settled||!active()||!image.complete||!image.naturalWidth||!image.naturalHeight)return;settled=true;showLoaded();};
+    const failed=()=>{if(settled||!active()||!image.complete||image.naturalWidth)return;settled=true;showFailed();};
     if(this.imageCleanup)this.imageCleanup();
     image.addEventListener('load',loaded);image.addEventListener('error',failed);this.imageCleanup=()=>{image.removeEventListener('load',loaded);image.removeEventListener('error',failed);};
-    const url=artworkImageViewURL(entry.image_url)||displayArchiveImageURL(entry.image_url);
     this.report(entry,'loading');this.reveal.show(url,{alt:entry.image_alt||entry.title});
-    if(image.complete&&new URL(image.currentSrc||image.src,this.document.baseURI).href===new URL(url,this.document.baseURI).href){if(image.naturalWidth)loaded();else failed();}
+    if(image.complete&&current()){if(image.naturalWidth)loaded();else failed();}
     return true;
   }
   report(entry,status){
@@ -190,8 +206,13 @@ export class ArchiveGallery{
     // The stage displays one image at a time. Unselected thumbnail candidates
     // are not pending central images, and their absence must not hold this
     // request in 'loading' after the selected museum image fails.
+    const available=batch.imageKeys.has(key(entry));
+    // Metadata-only selections identify their own missing link. They must not
+    // claim that every other candidate image failed. Legacy events without
+    // selection identity retain only the unambiguous all-no-image 0/0 case.
+    if(!available&&(status!=='unavailable'||!batch.selectedIdentity&&batch.imageKeys.size))return;
     const token=key(entry)+':'+status;if(token===batch.last)return;batch.last=token;
-    try{this.onImageStatus({type:'image_status',turn_id:batch.turn,status,loaded_count:status==='loaded'?1:0,total_count:1,
+    try{this.onImageStatus({type:'image_status',turn_id:batch.turn,status,loaded_count:status==='loaded'?1:0,total_count:available?1:0,
       ...(batch.selectedIdentity?{selected:{collection_id:entry.collection_id,id:entry.id}}:{})});}catch(error){/* A closed call must not break gallery browsing. */}
   }
   async search(query=''){

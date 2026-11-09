@@ -31,9 +31,9 @@ class ObservedSnapshot:
         self.searches = []
         self.closed = False
 
-    def search(self, query, history=()):
+    def search(self, query, history=(), **filters):
         self.searches.append((query, deepcopy(history)))
-        return self.snapshot.search(query, history)
+        return self.snapshot.search(query, history, **filters)
 
     def close(self):
         self.closed = True
@@ -113,7 +113,10 @@ class ArtworkSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.snapshots[session].searches, first_searches)
         context = self.assert_same_grounding(shown, 1)
         self.assertIn('image', context[0]['content'].lower())
-        self.assertEqual(len(context), len(self.providers.actor[0]['kwargs']['archive']) + 1)
+        # The first topic can already have its own browsing instruction. The
+        # follow-up replaces that intent with explicit image-display direction.
+        self.assertTrue(any(message['role']=='system' and 'Image display request:' in message['content']
+                            for message in context))
         self.assertEqual(context[-1]['role'], 'system')
         self.assertIn('image', context[-1]['content'].lower())
         self.assertEqual((len(self.providers.actor), len(self.providers.director), len(self.providers.voices)), (2, 2, 2))
@@ -141,7 +144,7 @@ class ArtworkSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(shown['image_request'], True)
         self.assertEqual(shown['matches'], initial['matches'])
         self.assertEqual(self.snapshots[session].searches, before_image)
-        self.assertEqual([query for query, _ in before_image], ['Tell me about Monet.'])
+        self.assertEqual([query for query, _ in before_image], ['Monet'])
         self.assert_same_grounding(shown, 2)
         self.assertEqual((len(self.providers.actor), len(self.providers.director)), (3, 3))
 

@@ -144,3 +144,63 @@ class MetImageLookupTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(json.loads(actor[1]['content'])['references'],event['matches'])
                 finally: await session.close()
             store.close()
+
+    async def test_broad_colour_browsing_does_not_refill_with_lazy_metadata_or_call_object_api(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store=CollectionDatabase(folder)
+            source=self.record()
+            source['title']='Colorful'
+            source['text']='Colorful painting from the supplied catalogue.'
+            source['metadata'].update(artist='Claude Monet',medium='oil on canvas')
+            for key in ('source_kind','collection_id','citation_id','excerpt'):source.pop(key)
+            store.import_records([source],collection_id='metropolitan-museum-of-art',label='Met',source_kind='museum-met')
+            snapshot=store.open_snapshot(['metropolitan-museum-of-art'])
+            requests=[]
+            def response(request):
+                requests.append(str(request.url))
+                return httpx.Response(200,json={'objectID':436535,'isPublicDomain':True,'title':'Colorful',
+                    'primaryImage':'https://images.metmuseum.org/CRDImages/ep/web-large/test.jpg'})
+            async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+                events=[]
+                async def send(value):events.append(copy.deepcopy(value))
+                async def audio(value):pass
+                session=LiveSession(ArchiveProviders(),example(),send,audio,
+                    archive=ArchiveSettings(enabled=True,scope='library',collection_ids=['metropolitan-museum-of-art']),
+                    archive_search=snapshot,image_lookup=MuseumImageLookup(client=client))
+                try:
+                    await session.begin(text='Show me colorful paintings with pictures.')
+                    await asyncio.wait_for(session.task,2)
+                    event=next(value for value in events if value['type']=='archive_sources')
+                    self.assertEqual(event['matches'],[])
+                    self.assertEqual(requests,[])
+                    self.assertEqual(events[-1]['type'],'response_done')
+                finally:await session.close()
+            store.close()
+
+    async def test_named_lazy_image_failure_never_publishes_an_unresolved_url(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store=CollectionDatabase(folder)
+            source=self.record()
+            source['metadata']['artist']='Claude Monet'
+            for key in ('source_kind','collection_id','citation_id','excerpt'):source.pop(key)
+            store.import_records([source],collection_id='metropolitan-museum-of-art',label='Met',source_kind='museum-met')
+            snapshot=store.open_snapshot(['metropolitan-museum-of-art'])
+            requests=[]
+            def response(request):
+                requests.append(str(request.url));return httpx.Response(404)
+            async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+                events=[]
+                async def send(value):events.append(copy.deepcopy(value))
+                async def audio(value):pass
+                session=LiveSession(ArchiveProviders(),example(),send,audio,
+                    archive=ArchiveSettings(enabled=True,scope='library',collection_ids=['metropolitan-museum-of-art']),
+                    archive_search=snapshot,image_lookup=MuseumImageLookup(client=client))
+                try:
+                    await session.begin(text='Show me an image of Monet.')
+                    await asyncio.wait_for(session.task,2)
+                    event=next(value for value in events if value['type']=='archive_sources')
+                    self.assertEqual(event['matches'],[])
+                    self.assertEqual(len(requests),1)
+                    self.assertEqual(events[-1]['type'],'response_done')
+                finally:await session.close()
+            store.close()

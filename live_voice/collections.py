@@ -18,11 +18,13 @@ import tempfile
 from typing import Literal
 from urllib.parse import urlsplit
 import uuid
+from itertools import islice
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .archive import _excerpt
 from .artwork_retrieval import ArtworkIndex, fold, retrieval_terms, spoken_artwork_query
+from .artwork_retrieval import one_edit
 
 
 DATABASE_NAME = 'collections.sqlite3'
@@ -37,6 +39,14 @@ MAX_MATCHES = 3
 MAX_EXCERPT = 2_000
 MAX_REFERENCE_TEXT = 6_000
 MAX_QUERY_TERMS = 64
+MAX_EXCLUDED_KEYS = 250
+_BROWSE_MEDIA = frozenset(('painting','drawing','print','woodcut','engraving','etching',
+    'lithograph','photograph','sculpture','watercolor','gouache','tempera','acrylic','oil'))
+_PAINT_MEDIA = frozenset(('oil','acrylic','watercolor','gouache','tempera','encaustic','fresco','casein','distemper'))
+_PRINT_MEDIA = frozenset(('woodcut','engraving','etching','lithograph','lithography','screenprint',
+    'serigraph','linocut','mezzotint','aquatint','intaglio','drypoint'))
+_COLOR_WORDS = frozenset(('colorful','colourful','color','colour','colors','colours','colored',
+    'coloured','multicolor','multicolour','multicolored','multicoloured','polychrome','vibrant'))
 METADATA_FIELDS = frozenset(('artist', 'date', 'medium', 'dimensions', 'credit_line',
                              'accession_number', 'classification', 'rights'))
 _COLLECTION_ID = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
@@ -239,9 +249,12 @@ def _fallback_expression(query, terms, expression):
     return ' AND '.join('"'+term.replace('"','""')+'"' for term in sorted(terms)) if strict else expression
 
 
-def _artwork_index(connection, ids=None):
+def _artwork_index(connection, ids=None, *, prepare_browse=False):
     clause = f' WHERE collection_id IN ({_where(ids)})' if ids else ''
-    return ArtworkIndex(connection.execute('SELECT rowid,collection_id,title,metadata FROM collection_entries'+clause, ids or ()))
+    fields = 'rowid,collection_id,title,metadata'+(',image_url,image_alt' if prepare_browse else '')
+    rows = connection.execute('SELECT '+fields+' FROM collection_entries'+clause, ids or ())
+    if prepare_browse: rows = _prepare_browse_index(connection,ids,rows=rows)
+    return ArtworkIndex(rows)
 
 
 def _record(row):
@@ -257,26 +270,162 @@ def _registry(row):
 def _where(ids): return ','.join('?' for _ in ids)
 
 
-def _matches(connection, ids, query, history=(), index=None):
+def _browse_medium(value):
+    if not isinstance(value,str) or len(value)>40: raise ValueError('Choose a supported artwork medium.')
+    value = fold(value).strip()
+    value = {'watercolour':'watercolor','watercolours':'watercolor','photos':'photograph',
+        'photo':'photograph','photography':'photograph','lithography':'lithograph'}.get(value,value)
+    if value.endswith('s') and value[:-1] in _BROWSE_MEDIA: value = value[:-1]
+    if value in _BROWSE_MEDIA or not value: return value
+    near = [medium for medium in _BROWSE_MEDIA if len(value)>4 and one_edit(value,medium)]
+    if len(near)==1: return near[0]
+    # A dropped letter followed by a plural is a common spoken-input spelling.
+    near = [medium for medium in _BROWSE_MEDIA if value.endswith('s') and len(value)>5 and one_edit(value[:-1],medium)]
+    if len(near)==1: return near[0]
+    raise ValueError('Choose a supported artwork medium.')
+
+
+def _browse_options(require_images=False,medium='',exclude_keys=()):
+    if type(require_images) is not bool: raise ValueError('Choose whether source images are required.')
+    medium = _browse_medium(medium)
+    try: excluded = tuple(islice(iter(exclude_keys),MAX_EXCLUDED_KEYS+1))
+    except TypeError: raise ValueError('Use bounded catalogue keys to exclude.') from None
+    if len(excluded)>MAX_EXCLUDED_KEYS: raise ValueError('Keep excluded catalogue keys bounded.')
+    result = set()
+    for key in excluded:
+        if (not isinstance(key,(tuple,list)) or len(key)!=2 or not isinstance(key[0],str)
+                or not _COLLECTION_ID.fullmatch(key[0]) or not isinstance(key[1],str)
+                or not _RECORD_ID.fullmatch(key[1])):
+            raise ValueError('Use saved collection and artwork identifiers to exclude.')
+        result.add(tuple(key))
+    return require_images,medium,tuple(sorted(result))
+
+
+def _medium_facets(metadata):
+    """Catalogue medium/classification only; prose about paint is not a painting."""
+    material = set(re.findall(r'[^\W_]+',fold(metadata.get('medium',''))))
+    classification = set(re.findall(r'[^\W_]+',fold(metadata.get('classification',''))))
+    tokens = {token[:-1] if token.endswith('s') and token[:-1] in _BROWSE_MEDIA else token
+              for token in material | classification}
+    if tokens & {'watercolour','watercolours'}: tokens.add('watercolor')
+    if 'lithography' in tokens: tokens.add('lithograph')
+    if 'acrylics' in tokens: tokens.add('acrylic')
+    facets = tokens & _BROWSE_MEDIA
+    if tokens & _PAINT_MEDIA or 'painting' in tokens: facets.add('painting')
+    if tokens & _PRINT_MEDIA: facets.add('print')
+    if tokens & {'photograph','photography','photographic','daguerreotype'}: facets.add('photograph')
+    return {'all'} | facets
+
+
+def _prepare_browse_index(connection,ids,*,rows):
+    """Feed the existing startup index and build facets in that same row pass."""
+    connection.execute('CREATE TEMP TABLE collection_browse('
+        'facet TEXT NOT NULL,has_image INTEGER NOT NULL,entry_rowid INTEGER NOT NULL,'
+        'PRIMARY KEY(facet,has_image,entry_rowid)) WITHOUT ROWID')
+    def prepare_rows():
+        pending = []
+        for row in rows:
+            image = False
+            if row['image_url']:
+                try: image = bool(public_https_url(row['image_url']))
+                except ValueError: pass
+            metadata = json.loads(row['metadata'])
+            facets = _medium_facets(metadata)
+            description = set(re.findall(r'[^\W_]+',fold(row['image_alt']+' '+' '.join(metadata.values()))))
+            chromatic = description & {'red','blue','green','yellow','purple','orange','pink','gold','golden','violet','turquoise'}
+            if description & _COLOR_WORDS or len(chromatic)>=2: facets.add('colorful')
+            for facet in facets:
+                pending.append((facet,int(image),row['rowid']))
+            if len(pending)>=8192:
+                connection.executemany('INSERT INTO collection_browse VALUES(?,?,?)',pending); pending.clear()
+            yield row
+        if pending: connection.executemany('INSERT INTO collection_browse VALUES(?,?,?)',pending)
+        connection.commit()
+    return prepare_rows()
+
+
+def _browse_clauses(ids,options):
+    images,medium,excluded = options
+    clauses = [f'e.collection_id IN ({_where(ids)})']
+    parameters = list(ids)
+    if images or medium:
+        clauses.append('e.rowid IN (SELECT entry_rowid FROM collection_browse WHERE facet=?'
+            + (' AND has_image=1' if images else '') + ')')
+        parameters.append(medium or 'all')
+    if excluded:
+        clauses.append('(e.collection_id,e.id) NOT IN ('+','.join('(?,?)' for _ in excluded)+')')
+        parameters.extend(value for key in excluded for value in key)
+    return ' AND '.join(clauses),parameters
+
+
+def filter_retrieved_matches(matches, *, require_images=False,medium='',exclude_keys=()):
+    """Apply the same constraints to already vetted, call-local candidates."""
+    images,medium,excluded = _browse_options(require_images,medium,exclude_keys)
+    excluded = set(excluded)
+    result = []
+    for match in matches:
+        if not isinstance(match,dict): continue
+        if (match.get('collection_id','qtm'),match.get('id')) in excluded: continue
+        if images:
+            try: eligible = bool(public_https_url(match.get('image_url')))
+            except ValueError: eligible = False
+            if not eligible: continue
+        metadata = match.get('metadata') if isinstance(match.get('metadata'),dict) else {}
+        if medium and medium not in _medium_facets(metadata): continue
+        result.append(match)
+        if len(result)==MAX_MATCHES: break
+    return result
+
+
+def _matches(connection, ids, query, history=(), index=None, *, require_images=False,medium='',exclude_keys=()):
+    options = _browse_options(require_images,medium,exclude_keys)
+    filtered = bool(options[0] or options[1] or options[2])
     terms, expression = _fts_query(query, history)
-    if not expression: return []
-    ranked = index.ranked(connection, ids, query, terms) if index is not None else None
+    if not expression and not filtered: return []
+    color_browse = filtered and bool(terms) and terms.issubset(_COLOR_WORDS)
+    if color_browse:
+        expanded = (terms-_COLOR_WORDS) | _COLOR_WORDS
+        expression = ' OR '.join('"'+term+'"' for term in sorted(expanded))
+    # A broad colour request is not an exact title/name lookup. Require actual
+    # catalogue colour words and keep unfiltered title searches unchanged.
+    ranked = index.ranked(connection, ids, query, terms) if index is not None and expression and not color_browse else None
+    clause,parameters = _browse_clauses(ids,options)
     if ranked is not None:
-        wanted = ranked[:MAX_MATCHES]
+        rows = []
+        # Filter before selecting three, while keeping SQL placeholder and row
+        # materialisation costs bounded even for a prolific artist or year.
+        ranked = ranked if filtered else ranked[:MAX_MATCHES]
+        for offset in range(0,len(ranked),256):
+            wanted = ranked[offset:offset+256]
+            batch = connection.execute('SELECT e.*,c.label AS collection_label,c.source_kind '
+                'FROM collection_entries e JOIN collections c ON c.id=e.collection_id '
+                f'WHERE e.rowid IN ({_where(wanted)}) AND '+clause,
+                (*wanted,*parameters)).fetchall()
+            order = {rowid:position for position,rowid in enumerate(wanted)}
+            batch.sort(key=lambda row:order[row['rowid']])
+            rows.extend(batch[:MAX_MATCHES-len(rows)])
+            if len(rows)>=MAX_MATCHES: break
+    elif not expression:
         rows = connection.execute('SELECT e.*,c.label AS collection_label,c.source_kind '
             'FROM collection_entries e JOIN collections c ON c.id=e.collection_id '
-            f'WHERE e.rowid IN ({_where(wanted)})', wanted).fetchall() if wanted else []
-        order = {rowid:position for position,rowid in enumerate(wanted)}
-        rows.sort(key=lambda row:order[row['rowid']])
+            'WHERE '+clause+' ORDER BY e.rowid LIMIT ?',(*parameters,MAX_MATCHES)).fetchall()
     else:
-        expression = _fallback_expression(query, terms, expression)
+        if not color_browse: expression = _fallback_expression(query, terms, expression)
         rows = connection.execute(
         'SELECT e.*,c.label AS collection_label,c.source_kind FROM collection_fts '
         'JOIN collection_entries AS e ON e.rowid=collection_fts.rowid '
         'JOIN collections AS c ON c.id=e.collection_id '
-        f'WHERE collection_fts MATCH ? AND e.collection_id IN ({_where(ids)}) '
+        'WHERE collection_fts MATCH ? AND '+clause+' '
         'ORDER BY bm25(collection_fts,2.0,1.0,0.8),e.rowid LIMIT ?',
-        (expression, *ids, MAX_MATCHES)).fetchall()
+        (expression, *parameters, MAX_MATCHES)).fetchall()
+    if not rows and color_browse and terms.issubset(_COLOR_WORDS):
+        # NGA visual descriptions live in image_alt, outside the existing FTS.
+        # An indexed fallback still requires supplied colour evidence: explicit
+        # colour language or at least two chromatic hues, never inferred pixels.
+        rows = connection.execute('SELECT e.*,c.label AS collection_label,c.source_kind '
+            'FROM collection_entries e JOIN collections c ON c.id=e.collection_id '
+            'WHERE '+clause+' AND e.rowid IN (SELECT entry_rowid FROM collection_browse WHERE facet=?) '
+            'ORDER BY e.rowid LIMIT ?',(*parameters,'colorful',MAX_MATCHES)).fetchall()
     matches = []
     for row in rows:
         entry = _record(row)
@@ -292,6 +441,7 @@ def _matches(connection, ids, query, history=(), index=None):
 
 class CollectionSnapshot:
     """A call-owned frozen disk copy; full museum catalogues do not fill RAM."""
+    supports_browse_filters = True
     def __init__(self, path, ids):
         self.ids = _validated_collection_ids(ids)
         self._lock = threading.RLock()
@@ -308,17 +458,18 @@ class CollectionSnapshot:
             self.count = self._connection.execute(
                 f'SELECT count(*) FROM collection_entries WHERE collection_id IN ({_where(self.ids)})', self.ids).fetchone()[0]
             # Prepare once while opening the call, before the first utterance.
-            self._retrieval_index = _artwork_index(self._connection, self.ids)
+            self._retrieval_index = _artwork_index(self._connection, self.ids,prepare_browse=True)
             self._connection.execute('PRAGMA query_only=ON')
         except Exception:
             self._connection.close()
             self._temporary.cleanup()
             raise
 
-    def search(self, query, history=()):
+    def search(self, query, history=(), *, require_images=False,medium='',exclude_keys=()):
         with self._lock:
             if self._connection is None: raise ValueError('The collection call snapshot is closed.')
-            return _matches(self._connection, self.ids, query, history, self._retrieval_index)
+            return _matches(self._connection, self.ids, query, history, self._retrieval_index,
+                require_images=require_images,medium=medium,exclude_keys=exclude_keys)
 
     def close(self):
         with self._lock:
@@ -651,18 +802,32 @@ class CollectionDatabase:
 
 class CollectionRouter:
     """Own snapshots and merge their rank positions; BM25 scores are not comparable."""
+    supports_browse_filters = True
     def __init__(self, snapshots):
         self.snapshots = tuple(snapshots)
         self.count = sum(snapshot.count for snapshot in self.snapshots)
         self.closed = False
         self._lock = threading.RLock()
 
-    def search(self, query, history=()):
+    def search(self, query, history=(), *, require_images=False,medium='',exclude_keys=()):
         if not isinstance(query, str): raise ValueError('Use a plain-text collection question.')
         with self._lock:
             if self.closed: raise ValueError('The collection call router is closed.')
             history = tuple(history)
-            lists = [list(snapshot.search(query, history))[:MAX_MATCHES] for snapshot in self.snapshots]
+            images,medium,excluded = _browse_options(require_images,medium,exclude_keys)
+            options = {'require_images':images,'medium':medium,'exclude_keys':excluded} if images or medium or excluded else {}
+            lists = []
+            for snapshot in self.snapshots:
+                if options and getattr(snapshot,'supports_browse_filters',False):
+                    hits = snapshot.search(query,history,**options)
+                elif images or medium:
+                    # Legacy QTM snapshots have no image/medium contract and
+                    # must not receive unsupported artwork-filter keywords.
+                    hits = []
+                else:
+                    hits = snapshot.search(query,history)
+                    if excluded: hits = filter_retrieved_matches(hits,exclude_keys=excluded)
+                lists.append(list(hits)[:MAX_MATCHES])
             result, seen = [], set()
             for rank in range(MAX_MATCHES):
                 for matches in lists:

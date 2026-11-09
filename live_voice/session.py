@@ -18,12 +18,47 @@ from .playback_policy import streams_voice, voice_pipeline, verification_before_
 from .turns import ReplyHistory
 from .voice import Delivery, VoiceSettings, spoken_input
 from .archive import retrieve, grounding_messages
-from .collections import collection_grounding_messages
+from .collections import collection_grounding_messages, filter_retrieved_matches
+from .artwork_browsing import ArtworkBrowsing
 from .artwork_requests import (image_request, image_context, image_reference_ack,
     image_confirmation, image_offer, image_reference_question, image_capability_context,
     image_correction_request, image_reference_selection, plural_image_reference)
 
 logger = logging.getLogger(__name__)
+
+
+def _specific_image_lookup_request(request):
+    """Allow bounded lazy-image lookup for a named work/artist, never broad browsing."""
+    from .artwork_retrieval import words
+    if not isinstance(request,dict) or request.get('followup') or not isinstance(request.get('query'),str): return False
+    terms = set(words(request['query']))-{'a','an','the','of','by','and','with','in','on','for','one','ones'}
+    broad = {'colorful','colourful','color','colour','colored','coloured','vibrant','polychrome',
+        'red','blue','green','yellow','purple','orange','pink','black','white','bright',
+        'art','artwork','artworks','painting','paintings','drawing','drawings','print','prints',
+        'woodcut','woodcuts','engraving','engravings','etching','etchings','lithograph','lithographs',
+        'photograph','photographs','photo','photos','sculpture','sculptures','image','images',
+        'picture','pictures','watercolor','watercolour','gouache','tempera','acrylic','oil',
+        'landscape','landscapes','portrait','portraits','abstract','modern','music','musician','musicians',
+        'people','person','nature','flowers','flower','more','another','different','next','other',
+        'visible','available','all','both','some','new'}
+    return bool(terms and not terms.issubset(broad))
+
+
+def _named_image_lookup_candidates(request,matches):
+    """Keep official lazy-image records whose supplied title/artist supports the name."""
+    from .artwork_retrieval import fold, one_edit
+    known = []
+    for match in matches[:3]:
+        if not isinstance(match,dict) or match.get('source_kind') not in ('museum-met','museum-getty'): continue
+        metadata = match.get('metadata') if isinstance(match.get('metadata'),dict) else {}
+        # Medium words must not masquerade as a named title/artist match.
+        candidate = {**match,'metadata':{'artist':metadata.get('artist','')}}
+        if image_reference_selection(request,[candidate]):
+            known.append(match); continue
+        query = ''.join(char for char in fold(request['query']) if char.isalpha())
+        artist = ''.join(char for char in fold(metadata.get('artist','')) if char.isalpha())
+        if len(query)>=8 and one_edit(query,artist): known.append(match)
+    return known
 
 
 def recognition_timings(values):
@@ -93,6 +128,7 @@ class LiveSession:
         self.last_archive_matches = []
         self.pending_image_offer = []
         self.image_display = None
+        self.artwork_browsing = ArtworkBrowsing()
 
     def image_status(self, value):
         """Accept current source IDs and bounded rendering feedback, never a model turn."""
@@ -105,8 +141,9 @@ class LiveSession:
             if not self.gallery_greeting or not isinstance(selected,dict): return False
             selected_key = (selected.get('collection_id'),selected.get('id'))
             if (not all(isinstance(part,str) for part in selected_key)
-                    or selected_key not in self.image_display.get('image_keys',self.image_display['keys'])): return False
-        expected_total = 1 if selected_key else self.image_display['total_count']
+                    or selected_key not in self.image_display['keys']): return False
+        image_keys = self.image_display.get('image_keys',self.image_display['keys'])
+        expected_total = int(selected_key in image_keys) if selected_key else self.image_display['total_count']
         if (type(turn) is not int or turn!=self.turn_id or turn!=self.image_display['turn_id']
                 or type(loaded) is not int or type(total) is not int or not 0<=loaded<=total<=3
                 or total!=expected_total
@@ -120,7 +157,15 @@ class LiveSession:
         if same_selection and previous=='loaded' and (status!='loaded' or loaded<self.image_display['loaded_count']): return False
         self.image_display.update(status=status,loaded_count=loaded)
         if selected_key: self.image_display['selected_key'] = selected_key
+        affected = selected_key or self.image_display.get('requested_key')
+        if affected:
+            if status == 'unavailable': self.artwork_browsing.fail(affected)
+            elif status == 'loaded': self.artwork_browsing.restore(affected)
         return True
+
+    def _selected_artwork_key(self):
+        state = self.image_display or {}
+        return state.get('selected_key') or state.get('requested_key')
 
     @staticmethod
     def _image_keys(matches):
@@ -371,7 +416,12 @@ class LiveSession:
             archive_started = time.perf_counter()
             if self.archive and not introduction_only(text,visitor_introduction):
                 scope = self.archive.scope
+                browsing = (self.artwork_browsing.plan(text,self.last_archive_matches,
+                    selected_key=self._selected_artwork_key()) if self.archive.collection_ids and not action else None)
                 requested_image = (image_correction_request(text) or image_request(text)) if not action else None
+                direct_image_request = requested_image
+                if browsing is not None and browsing.require_images and browsing.reason != 'hesitation':
+                    requested_image = {'query':browsing.query,'followup':not browsing.fresh_search}
                 offered = copy.deepcopy(self.pending_image_offer)
                 self.pending_image_offer = []
                 confirmed = not action and not requested_image and offered and image_confirmation(text)
@@ -393,15 +443,39 @@ class LiveSession:
                 if selected_reference is not None:
                     reuse = True
                     previous_matches = selected_reference
+                filters = {}
+                if browsing is not None:
+                    search_text,search_history = browsing.query,()
+                    reuse = not browsing.fresh_search
+                    previous_matches = filter_retrieved_matches(self.last_archive_matches,
+                        require_images=browsing.require_images,medium=browsing.medium,
+                        exclude_keys=browsing.exclude_keys)
+                    if browsing.require_images or browsing.medium or browsing.exclude_keys:
+                        filters = {'require_images':browsing.require_images,'medium':browsing.medium,
+                                   'exclude_keys':browsing.exclude_keys}
                 if scope == 'library':
                     if self.archive_search is None: raise ValueError('The local archive snapshot is unavailable.')
                     matches = (copy.deepcopy(previous_matches) if reuse
-                               else await asyncio.to_thread(self.archive_search.search, search_text, search_history))
+                               else await asyncio.to_thread(self.archive_search.search, search_text, search_history,**filters))
                     count = self.archive_search.count
                 else:
                     matches = (copy.deepcopy(previous_matches) if reuse
                                else retrieve(self.archive_entries, search_text, search_history))
+                    if filters: matches = filter_retrieved_matches(matches,**filters)
                     count = len(self.archive_entries)
+                if (not matches and not reuse and scope=='library' and filters.get('require_images')
+                        and self.image_lookup is not None and _specific_image_lookup_request(direct_image_request)):
+                    # Bulk Met/Getty records omit image URLs even when the
+                    # official object API can provide them. Preserve that exact
+                    # named lookup without refilling broad colour/more requests
+                    # with metadata-only records or promising unavailable URLs.
+                    named_filters = {key:value for key,value in filters.items() if key!='require_images'}
+                    candidates = await asyncio.to_thread(self.archive_search.search,
+                        search_text,search_history,**named_filters)
+                    candidates = _named_image_lookup_candidates(direct_image_request,candidates)
+                    if candidates:
+                        resolved = await self.image_lookup.resolve(candidates)
+                        matches = filter_retrieved_matches(resolved,**filters)
                 if self.image_lookup is not None and self.archive.collection_ids:
                     matches = await self.image_lookup.resolve(matches)
                 archive_context = (collection_grounding_messages(matches) if self.archive.collection_ids
@@ -430,6 +504,26 @@ class LiveSession:
                             'Do not invent depicted instruments, people, composition or colours from an artwork title or your earlier replies. Use only supplied catalogue description and metadata.'}
                 if requested_image:
                     archive_context.append({'role':'system','content':image_context(requested_image,matches)})
+                if browsing is not None:
+                    data = json.loads(archive_context[1]['content'])
+                    data['browsing'] = {'query':browsing.query,'medium':browsing.medium,
+                        'images_requested':browsing.require_images,'intent':browsing.reason,
+                        'search_completed':browsing.fresh_search,'matching_records':len(matches)}
+                    archive_context[1] = {**archive_context[1],'content':json.dumps(data,ensure_ascii=False,separators=(',',':'))}
+                    note = ('The browsing field preserves the participant\'s current subject and medium/image constraints. '
+                            'Use the supplied matches now. No background catalogue search continues after your reply; '
+                            'do not promise to look later, say "just a moment", or claim you are still searching. '
+                            'If no matching image records were retrieved, state that limit and ask for a broader subject or medium. '
+                            'An image URL is a candidate, not proof of a visible image. Do not say "the image is available" '
+                            'unless that exact gallery selection is confirmed loaded. '
+                            'Do not infer colours, objects or composition from a title or from the search request; use supplied catalogue descriptions only. ')
+                    if browsing.reason == 'hesitation':
+                        note += 'The participant only hesitated. Keep the current topic, respond briefly, and do not recommend a new artwork or ask to show it again.'
+                    elif browsing.reason == 'status':
+                        note += 'This is a progress follow-up on the earlier request, not a new search for words such as luck or anything. Present the current result or its absence.'
+                    elif browsing.require_images:
+                        note += 'The participant has already requested images. The interface is displaying the supplied selection; do not ask again whether they want to see it.'
+                    archive_context.append({'role':'system','content':note})
                 self.last_archive_context = archive_context
                 source_event = {'type':'archive_sources','turn_id':turn_id,'scope':scope,
                                 'selected_count':count,'matches':matches}
@@ -443,7 +537,10 @@ class LiveSession:
                     self.image_display = {'turn_id':turn_id,'keys':self._image_keys(matches),
                         'image_keys':self._image_keys([match for match in matches if match.get('image_url')]),
                         'total_count':sum(bool(match.get('image_url')) for match in matches[:3]),
-                        'loaded_count':0,'status':'sent'}
+                        'loaded_count':0,'status':'sent',
+                        'requested_key':((gallery_selected['collection_id'],gallery_selected['id'])
+                            if self.gallery_greeting and self.archive.collection_ids and gallery_selected else
+                            next(iter(self._image_keys(matches))) if len(matches)==1 else None)}
                 try:
                     await self.send_json(source_event)
                 except BaseException:
@@ -453,6 +550,8 @@ class LiveSession:
                 # A brief acknowledgement does not replace the artwork topic.
                 if matches or requested_image or not image_reference_ack(text):
                     self.last_archive_matches = copy.deepcopy(list(matches)[:3])
+                if self.archive.collection_ids:
+                    self.artwork_browsing.observe(matches,selected_key=self._selected_artwork_key())
             metrics['archive_ms'] = round((time.perf_counter()-archive_started)*1000)
             plan = None
             if self.director.enabled:
@@ -763,6 +862,7 @@ class LiveSession:
         self.last_archive_matches = []
         self.pending_image_offer = []
         self.image_display = None
+        self.artwork_browsing = ArtworkBrowsing()
         if self.story_director_task:
             self.story_director_task.cancel();await asyncio.gather(self.story_director_task,return_exceptions=True)
         if self.story_task:

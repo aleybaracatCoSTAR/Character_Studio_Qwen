@@ -135,7 +135,9 @@ class GallerySelectionSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.session.image_status(self.status(match)))
         reordered = [source['matches'][2],source['matches'][0],source['matches'][1]]
         self.snapshot.search = lambda query,history=(): deepcopy(reordered)
-        following = await self.turn('Find more musicians')
+        # A repeated subject preserves the stage. "More" now explicitly asks
+        # for a new unseen page and is covered by browsing-session tests.
+        following = await self.turn('Find musicians')
         identity = {'collection_id':COLLECTION,'id':match['id']}
         self.assertEqual(following['matches'],reordered)
         self.assertEqual(following['gallery_selected'],identity)

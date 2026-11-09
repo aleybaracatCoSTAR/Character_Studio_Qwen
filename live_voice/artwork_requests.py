@@ -222,7 +222,10 @@ def image_capability_context(matches, state=None):
     common = ('The application can display available source images directly in this chat, with an Open image '
               'link for a separate view. You must not claim that you cannot show images directly. You receive '
               'metadata and URLs, not image pixels; do not claim to have inspected an image. An available URL '
-              'does not prove that the participant\'s browser has loaded it. ')
+              'does not prove that the participant\'s browser has loaded it. '
+              'Do not say an image is available or visible unless the browser confirmed that exact selection loaded. '
+              'A catalogue lookup finishes before this reply; no background search continues after you finish speaking. '
+              'Use the current supplied result or explain its absence now; do not promise to search later or say "just a moment". ')
     if available:
         status = {
             'sent': 'An image-display message was sent; browser loading has not been confirmed. ',

@@ -1,0 +1,7 @@
+flowchart LR
+  Mic["Browser microphone: 16 kHz PCM"] --> STT["CPU: Faster-Whisper base.en, 74M, plus VAD"]
+  STT --> Context["Character, heard conversation, archive search"]
+  Context --> Director["Third allocated H200: Qwen3-32B director, 32.8B"]
+  Director --> Actor["Second allocated H200: Qwen3-30B-A3B-Instruct-2507; 30.5B total, 3.3B active"]
+  Actor -->|"complete text and one delivery cue"| Voice["First allocated H200: Fish Drama 3; 35B MoE, 3B active backbone, plus decoder"]
+  Voice -->|"streaming 44.1 kHz PCM"| Playback["Browser playback with barge-in"]

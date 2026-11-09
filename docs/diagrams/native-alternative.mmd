@@ -1,0 +1,8 @@
+flowchart LR
+  Mic["Browser microphone: recorded 16 kHz PCM"] --> STT["CPU: Faster-Whisper base.en, 74M, plus VAD"]
+  STT --> Context["Character, heard conversation, archive search"]
+  Context --> Director["Third allocated H200: Qwen3-32B director, 32.8B"]
+  Director --> Thinker["First allocated H200: Qwen3-Omni Thinker, about 30B total and 3B active, plus encoders"]
+  Mic -->|"original microphone audio via backend"| Thinker
+  Thinker --> Talker["Second allocated H200: Talker about 3B total and 0.3B active; Code2Wav about 200M"]
+  Talker -->|"streaming 24 kHz PCM and text"| Playback["Browser playback: turn-based with barge-in"]

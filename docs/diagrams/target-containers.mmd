@@ -1,0 +1,25 @@
+flowchart LR
+  Browser["Browser or future engine client"] --> Front["PROPOSED frontend container: static assets and same-origin reverse proxy"]
+  Front -->|"HTTP API and upgraded WebSocket"| Back["PROPOSED backend container: FastAPI orchestration, sessions, archives"]
+  Back -->|"OpenAI-shaped chat completions"| Actor["Actor service: Qwen3-30B-A3B-Instruct-2507, second allocated GPU"]
+  Back -->|"OpenAI-shaped chat completions and director JSON"| Director["Director service: Qwen3-32B, third allocated GPU"]
+  Back -->|"audio speech API plus documented voice extensions"| TTS["TTS service: Drama 3 and decoder, first allocated GPU"]
+  Back -.->|"optional profile"| ASR["Listening service: Nemotron on third GPU, Smart Turn on CPU"]
+  Back -.->|"alternative to actor and TTS"| Omni["Native Omni service: Thinker on first GPU; Talker and Code2Wav on second"]
+  Back --> Archives[("Persistent writable archive volume: SQLite, snapshots, import provenance")]
+  Imports["Coordinated import task: one writer"] --> Archives
+  Museums["Museum and archive source APIs"] --> Imports
+  Museums -.->|"available image URLs"| Browser
+  Weights[("Pinned checkpoints mounted read-only")]
+  Weights --> Actor
+  Weights --> Director
+  Weights --> TTS
+  Weights --> Omni
+  Weights --> ASR
+  Cache[("Separate writable cache, temporary files and log volumes")]
+  Cache --- Back
+  Cache --- TTS
+  Cache --- Omni
+  Secrets["Runtime configuration and injected secrets"] -.-> Back
+  Portable["PROPOSED application OpenAI-compatible text facade; custom live protocol remains"] -.-> Back
+  Deployment["Private model network. Docker Compose for approved hosts; cluster-approved Slurm containers on Surrey."] -.-> Front
