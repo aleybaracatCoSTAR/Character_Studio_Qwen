@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1100" viewBox="0 0 1400 1100">
+<rect width="100%" height="100%" fill="white"/>
+<text x="55" y="52" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="46" font-weight="700" fill="#20272c">CURRENT · Character + archive stack</text>
+<text x="55" y="104" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#44535d">Three H200s · two Qwens + Drama 3 · turn-based with barge-in</text>
+<rect x="55" y="175" width="400" height="240" rx="18" fill="#f0ecf7" stroke="#647782" stroke-width="2"/>
+<text x="255.0" y="254.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Browser UI</text>
+<text x="255.0" y="295.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Microphone: 16 kHz PCM</text>
+<text x="255.0" y="336.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Or a typed message</text>
+<rect x="500" y="175" width="400" height="240" rx="18" fill="#eff4f7" stroke="#647782" stroke-width="2"/>
+<text x="700.0" y="233.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Recognition · CPU</text>
+<text x="700.0" y="274.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Faster-Whisper base.en</text>
+<text x="700.0" y="315.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">74M · INT8</text>
+<text x="700.0" y="356.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">WebRTC VAD</text>
+<rect x="945" y="175" width="400" height="240" rx="18" fill="#eef5e8" stroke="#647782" stroke-width="2"/>
+<text x="1145.0" y="213.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Backend context + RAG</text>
+<text x="1145.0" y="254.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">FastAPI · port 18091</text>
+<text x="1145.0" y="295.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Character + heard history</text>
+<text x="1145.0" y="336.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Current narrative beat</text>
+<text x="1145.0" y="377.0" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">SQLite FTS5 + fuzzy</text>
+<polyline points="455,295 500,295" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="500,295 487.0,287.85 487.0,302.15" fill="#647782"/>
+<polyline points="900,295 945,295" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="945,295 932.0,287.85 932.0,302.15" fill="#647782"/>
+<polyline points="255,175 255,145 600,145" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round" stroke-dasharray="12 8"/>
+<polyline points="800,145 1145,145 1145,175" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round" stroke-dasharray="12 8"/>
+<polygon points="1145,175 1152.15,162.0 1137.85,162.0" fill="#647782"/>
+<text x="700" y="142" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="400" fill="#44535d">Typed input</text>
+<rect x="945" y="530" width="400" height="220" rx="18" fill="#e9f0fb" stroke="#647782" stroke-width="2"/>
+<text x="1145.0" y="578.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Director · GPU slot 2</text>
+<text x="1145.0" y="619.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Qwen3-32B</text>
+<text x="1145.0" y="660.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">32.8B dense</text>
+<text x="1145.0" y="701.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">When enabled</text>
+<rect x="500" y="530" width="400" height="220" rx="18" fill="#e9f0fb" stroke="#647782" stroke-width="2"/>
+<text x="700.0" y="578.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Actor · GPU slot 1</text>
+<text x="700.0" y="619.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Qwen3-30B-A3B</text>
+<text x="700.0" y="660.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Instruct-2507</text>
+<text x="700.0" y="701.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">30.5B / 3.3B active</text>
+<rect x="55" y="530" width="400" height="220" rx="18" fill="#f9eee5" stroke="#647782" stroke-width="2"/>
+<text x="255.0" y="578.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Voice · GPU slot 0</text>
+<text x="255.0" y="619.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Fish Drama 3</text>
+<text x="255.0" y="660.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">35B / 3B active</text>
+<text x="255.0" y="701.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Plus audio decoder</text>
+<polyline points="1145,415 1145,475 700,475" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="1145,475 1145,530" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1145,530 1152.15,517.0 1137.85,517.0" fill="#647782"/>
+<polyline points="700,475 700,530" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="700,530 707.15,517.0 692.85,517.0" fill="#647782"/>
+<text x="730" y="444" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="400" fill="#44535d">Context to both Qwens</text>
+<polyline points="945,640 900,640" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="900,640 913.0,647.15 913.0,632.85" fill="#647782"/>
+<polyline points="500,640 455,640" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="455,640 468.0,647.15 468.0,632.85" fill="#647782"/>
+<rect x="945" y="790" width="400" height="100" rx="18" fill="#eef5e8" stroke="#647782" stroke-width="2"/>
+<text x="1145.0" y="819.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Retrieved image URLs</text>
+<text x="1145.0" y="860.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">No LLM vision</text>
+<polyline points="1345,335 1370,335 1370,840 1345,840" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1345,840 1358.0,847.15 1358.0,832.85" fill="#647782"/>
+<text x="500" y="805" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="400" fill="#44535d">Complete actor text first</text>
+<text x="500" y="847" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="400" fill="#44535d">One voice + emotion per reply</text>
+<rect x="55" y="930" width="1290" height="100" rx="18" fill="#f0ecf7" stroke="#647782" stroke-width="2"/>
+<text x="700.0" y="959.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#20272c">Browser playback + gallery</text>
+<text x="700.0" y="1000.5" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="400" fill="#20272c">Streamed 44.1 kHz PCM and available archive images</text>
+<polyline points="255,750 255,930" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="255,930 262.15,917.0 247.85,917.0" fill="#647782"/>
+<polyline points="1145,890 1145,930" fill="none" stroke="#647782" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1145,930 1152.15,917.0 1137.85,917.0" fill="#647782"/>
+<text x="55" y="1070" text-anchor="start" dominant-baseline="middle" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="400" fill="#44535d">GPU slots follow the Slurm allocation. Images go to the browser, not to the actor.</text>
+</svg>

@@ -1,139 +1,87 @@
-# Character Studio · Qwen
+# Character Studio and Art Archive Studio
 
-**Developer architecture handoff:** [Current models, APIs, storage and the proposed container deployment](docs/DEVELOPER_ARCHITECTURE.md). Includes editable Mermaid diagrams for the current Drama pipeline, native Omni alternative and separate frontend/backend target. Container packaging and the application-level OpenAI-compatible facade are specified work, not an implemented deployment.
+Create a character, shape their memories and narrative, and talk to them. Give an archive character access to local collections so they can retrieve source material and show available artwork images beside the conversation.
 
-**Gallery browsing context:** requests such as “colorful paintings with pictures” retain their subject and medium through “Any luck?” and “Um.” Image/medium filters run before the top three results; more results exclude already shown works, and image failures exclude the affected selection. Exact named Met/Getty requests retain bounded official image resolution. CPU fixtures validate this behaviour; real-model adherence still needs checking.
+**Main stack:** two separate Qwen text LLMs, Fish Audio Drama 3 for voice, and Faster-Whisper for English speech recognition. The reference deployment is `quality-3gpu` with `baseline` listening.
 
-**Unity demo (`unity-demo` branch):** the [Robin Unity package](unity/README.md) adds a separate gallery scene, microphone/text conversation, retrieved artwork textures and a comparison panel for Drama 3 and streaming Qwen3-Omni. The GPU services and archive databases stay on the existing server.
+**For developers:** start with the [architecture handoff](docs/DEVELOPER_ARCHITECTURE.md), then the [Surrey deployment guide](docs/MULTI_GPU.md). The handoff covers the current application, request flow, storage, API boundaries and proposed container packaging.
 
-**Lower-delay Drama 3 playback:** the live app now plays audio as it arrives, with one voice and emotion per complete reply. Full-take checking remains available via `LIVE_VOICE_PLAYBACK=checked`; streaming checks run after release and incomplete audio never restarts automatically. [Mode and restart details](docs/DRAMA3_LATENCY.md#live-playback-mode).
+## Art Archive Studio
 
-**Direct Drama 3 latency test:** run one warmup and five measured voice requests, with a fixed reference, playable WAVs and a JSON report. It bypasses the conversation's recognition/director/actor and complete-take word checks separately from either playback mode. [Run and interpret the benchmark](docs/DRAMA3_LATENCY.md).
+![Art Archive Studio showing an artwork, catalogue information and Robin conversation controls](docs/screenshots/art-archive-studio-gallery.jpg)
 
-**Gallery voice controls:** **Voice & delivery** opens the familiar speaking-style, emotion, expression and vocal-direction settings directly. Choose a built-in voice or save a named custom WAV plus its transcript in **My saved voices**. Saved clips stay in this browser on this address and restore after reload; character JSON stores only a voice ID. [Using voices in Art Archive Studio](docs/ARCHIVE_GALLERY.md#voice-and-delivery).
+Explore a collection with Robin or another authored character. Search by artist, title, date or subject; display retrieved images with a pixel reveal; and retain the source record, catalogue details and museum link. `/archive/` offers the archive workspace; `/archive/gallery/` gives the artwork more room.
 
-**Art Archive Studio:** open **Gallery view** at `/archive/gallery/` for a centred artwork, a thumbnail trail and a compact character conversation. Retrieved artworks reveal from mosaic blocks to a clear image; museum details and source links remain beside the chat. The existing `/archive/` view stays available and shares the same saved archive characters. [Gallery controls and behaviour](docs/ARCHIVE_GALLERY.md).
+Museum connectors cover the National Gallery of Art, the Met, Art Institute of Chicago, Cleveland, Getty and Rijksmuseum. Queering the Map stories use a separate database. Each server can search only the collections actually imported and selected for the call.
 
-[Gallery with artwork details beside the image](docs/screenshots/archive-gallery-side-details.jpg) · [Framed pixel reveal in progress](docs/screenshots/archive-gallery-reveal.jpg). Visitors can enter their name or say “My name is…” for a personalised greeting.
+The archive currently uses **SQLite full-text search with spelling-tolerant matching and filters**. It supplies a few relevant records to the models for each reply. Embedding-based search is proposed work. Images load for browser display from source links or a vetted museum relay; the text LLMs receive catalogue descriptions and metadata, rather than image pixels. [Archive setup and retrieval](docs/RAG_COLLECTIONS.md) · [Full museum imports](docs/FULL_MUSEUM_IMPORTS.md).
 
-**New: compare native streaming speech with the current setup.** Choose **Current · Qwen + Drama 3** or **Streaming · Qwen3-Omni** using the same saved character, director and archives. **Compare replies** shows transcripts, source references and separate timing estimates, with a JSON download. The isolated three-H200 experiment runs sequentially with the original stack on the same portal port; its runtime and environment are separate. [Setup and fair comparison](docs/QWEN_STREAM_COMPARISON.md) · [Surrey runtime commands](experiments/qwen_stream/README.md). Hardware delay and character quality still need measurement on Surrey.
+## Character Studio
 
-A small rehearsal space for creating a character and talking to it using **Qwen3-Omni-30B-A3B-Instruct**. Edit the character on the left, then type or record a question on the right. Anna, an underappreciated washing machine in a wealthy household, is the included fictional example.
+![Creating a character in Character Studio](docs/screenshots/character-studio-create.jpg)
 
-**Find and show artworks by voice or text:** archive search prioritizes artist, title and artwork date, with spelling tolerance for examples such as “Agnolo Gadi” and “Madonne and Child Entrhoned with Twelve Angels.” “Thirteen eighty-seven” searches1387. **Show me the image**, **pictures of them**, and **Yes, please** after a grounded image offer display the same records in chat; **I can’t see it** retries that display. **Open image** opens a separate view. Known records without an imported image keep their title and original museum link. Original catalogue spellings and ambiguity are preserved. [Examples, context and search limits](docs/ARTWORK_SEARCH.md).
+Create separate characters with identity, motivation, environment, memories, boundaries and speaking style. Talk by microphone or test with text. Director controls can guide an emotional trigger or a sequence of narrative beats; the controls collapse to keep the transcript visible.
 
-**Full museum collections for Robin:** **Archive → + Add museum collection → Entire published collection** imports the Met, Art Institute of Chicago, Cleveland, Rijksmuseum and Getty into the local search index, alongside NGA. Choose one museum or all five; background progress, Stop and Resume retain committed batches. **Use all art collections** selects the populated museum collections for the current character. Bulk CSV/archive files and efficient paged harvests store metadata plus eligible image links; Met/Getty image links are resolved only for retrieved works. Smaller artist/title/subject imports remain available. [Full import setup and source coverage](docs/FULL_MUSEUM_IMPORTS.md) · [Matching-artwork imports](docs/MUSEUM_COLLECTIONS.md).
+![Anna narrative beat editor with goals, private notes and timing controls](docs/screenshots/narrative-beats-preview.jpg)
 
-**Create more characters in the live portal:** choose **New character** beside the character picker, enter a name and optional role, then fill their details, memories, environment, voice and director script. Each profile saves separately in this browser and appears in **Your characters**. Existing characters are preserved; end the current call before creating or switching. On `/archive/`, new characters start with access to the whole local archive. Pull and refresh the page to use this frontend update; it works with baseline and experimental listening.
+The director plans intention and emotional delivery; the actor writes the dialogue. Narrative beats are Python application state, not another model. Robin's shipped starter has director calls and narrative beats disabled. Enable them in **Director script** when you want that guided experience; the three-GPU deployment still loads the separate director server.
 
-**Karim is now a built-in choice:** the Egyptian queer singer/songwriter, out in London but not to his parents and navigating faith and family, is available in **Your characters**. This starter reconstructs Aley's brief; it does not replace or claim to recover the original profile. It has a male reference voice, free conversation and three optional manual beats. The main library also preserves distinct surviving legacy character records before replacing old storage keys. [Karim and recovery limits](docs/KARIM.md). Pull, restart the stack and refresh to load the new preset.
+## Voice and model input inspection
 
-**Speak to interrupt:** new microphone calls enable **Allow interruptions**. A sustained microphone onset stops the old reply and preserves the beginning of the participant's speech through a server-confirmed handover. Browser echo cancellation and recent-playback comparison reduce likely speaker echoes; they are not a guarantee for every speaker setup. The switch can be turned off live, and **Stop reply** remains available. [Behavior, limits and restart](docs/INTERRUPTIONS.md). No extra model or GPU is required; a real microphone comparison is still needed.
+![Voice and delivery controls with a saved custom voice selected](docs/screenshots/art-archive-voice-settings.jpg)
 
-**Art character and multiple collections:** select **Robin**, the new fictional gallery guide, to consult the **National Gallery of Art** catalogue. Open **Archive** to choose collections or **+ Add collection** to import another JSON/JSONL/CSV database export. Retrieved images, artwork details and source links appear beside chat. Full local validation indexed **146,454 artworks**, including **63,884 open-access thumbnails**; run the importer on Surrey before that server has the data. This is SQLite/FTS lexical RAG with grounded text, not image analysis or model training. QTM storage stays separate. [Import, UI, format and limits](docs/RAG_COLLECTIONS.md).
+Choose Automatic, Female, Male or a custom reference WAV with its exact transcript. Save named voices in this browser and use speaking style, emotion and vocal direction to shape delivery. Voice settings and authored prompts guide the model; they do not guarantee a particular performance. [Voice controls](docs/ARCHIVE_GALLERY.md#voice-and-delivery).
 
-**New optional listening experiment:** [Try Nemotron GPU streaming ASR + Smart Turn v3.2](docs/LISTENING_EXPERIMENT.md), following Mark Boas's suggestions. It transcribes during speech and judges candidate pauses, with a temporary live transcript. A separate environment preserves the working voice dependencies. The three-GPU launcher shares the director GPU and accepts `--listening nemotron-smart-turn`; `baseline` remains the default. The director and complete one-emotion voice validation stay in place for this first comparison. CPU/protocol checks do not establish GPU fit or a latency improvement; the guide includes Surrey install/start and comparison commands.
+**See what the model sees** opens captured actor, director and voice requests. Select a request to keep it still, then download readable text or the recent JSON log. [Request inspector](docs/MODEL_INPUTS.md).
 
-**Live voice experiment added:** [Follow the live setup guide](docs/LIVE_SETUP.md) for continuous microphone input, automatic pause detection, interruption and streamed Drama 3 speech. That mode uses English Faster-Whisper + a small Qwen3-4B text model + Drama 3, separately from the original Qwen-Omni 30B baseline described below. [View the live UI preview](docs/screenshots/live-preview.jpg).
+These screenshots are interface previews using example profiles and public catalogue material. They illustrate the controls, not a new GPU or voice-quality benchmark. Earlier screenshots can contain the previous gallery header name.
 
-**The live mode now includes [narrative beats and performer controls](docs/NARRATIVE.md), plus [two-/three-GPU quality profiles](docs/MULTI_GPU.md).** The [director orchestrator](docs/DIRECTOR.md) works as follows: a backstage LLM plans each reply’s intention and vocal delivery, Qwen acts the character, and Drama 3 speaks. The director defaults to a separate call to the existing Qwen server; a different running LLM endpoint can be configured. The sidebar includes Female/Male reference voices, custom WAV upload, vocal emotion and an editable emotional trigger. Anna's example is **Press reset → Anxious → fear of losing memories**. With **Allow interruptions**, speak to take over; with it off, the microphone waits during replies. **Stop reply** works in both modes. [Preview the trigger editor](docs/screenshots/contextual-reaction-preview.jpg). Triggers now use a local-model contextual decision rather than exact wording. Vocal direction is fixed for a complete reply, synthesized as one continuous take without a natural-delivery fallback; the new director and audible performance still need a live listening test. The earlier trigger-only check scored 11/12 on its small diagnostic set; see [verification](docs/DIRECTOR.md#verification).
+## Models and architecture
 
-**Response timing and conversation context:** the live app now waits 400 ms of silence, starts recognition provisionally at 200 ms and reuses it only when the final audio matches exactly. Microphone packets are 40 ms. It sends twelve recent exchanges plus relevant older quotes to the character, with a bounded RAM archive for the current call. Ending the call clears that memory. Whole-reply emotional direction and voice validation are preserved. See [timing and memory details](docs/LIVE_SETUP.md); actual GPU latency improvement has not yet been measured.
+| Role | Checkpoint | Size | Reference placement |
+|---|---|---|---|
+| Speech recognition | `Systran/faster-whisper-base.en` | 74M parameters | CPU, INT8, eight threads |
+| Character actor | `Qwen/Qwen3-30B-A3B-Instruct-2507` | 30.5B total, 3.3B active per token | Second allocated H200 |
+| Narrative director | `Qwen/Qwen3-32B` | 32.8B dense | Third allocated H200 |
+| Spoken voice | `fishaudio/drama-3` | 35B MoE, 3B active backbone, with audio decoding | First allocated H200 |
 
-**Inspect and download model inputs:** choose **See what the model sees** beside the live conversation title. Your selected request stays still until you choose another or **Show latest**. **Download request (.txt)** saves its readable prompts, context and settings; **Download recent (.json)** saves the recent captured request log. Copying JSON is also available. [How the viewer works](docs/MODEL_INPUTS.md).
+![Character Studio and archive architecture using Whisper, the Qwen director and actor, and Drama 3](docs/diagrams/character-archive-stack.svg)
 
-**KADEN is ready to rehearse:** select **KADEN** in the live sidebar's Character picker. Existing profiles saved at this browser address stay separate choices with their own voice, director and story settings. KADEN includes a male voice reference and five performer-controlled beats adapted from the Lighthouse run sheet. [Quick test and ending cues](docs/KADEN.md).
+GPU positions refer to the scheduler's allocated device list. The actor and director are separate text model processes. Drama 3 uses the vLLM-Omni serving runtime; that runtime name does not mean the Qwen3-Omni model is used in this stack.
 
-**Character + archive:** open `/archive/` for **Mika**, an editable character that consults [Queering the Map](https://www.queeringthemap.com/) stories during voice or text conversation. The archive now supports a local SQLite database, full-text search, pagination and JSON/JSONL/CSV collection import. Choose **Whole local archive** to search all imported stories, or retain a curated selection. The official public snapshot imported locally on 2 November 2026 contains **123,209 stories**. Excerpts and source links appear beside replies; normal Karim/KADEN settings stay separate. [Import the larger collection on Surrey](docs/QTM_DATABASE.md) · [Scope, grounding and attribution](docs/ARCHIVE.md).
+The backend prepares character facts, heard conversation, current narrative state and retrieved evidence. The director returns a structured plan when enabled. The actor completes its reply text, then Drama 3 produces one continuous take with a fixed reference and emotional direction. Audio streams to the browser as it arrives. This is a turn-based pipeline with interruption support, rather than continuous full-duplex speech-to-speech.
 
-**Beat replies and voice recovery:** entering a new narrative beat now prompts one character reply, waiting for participant speech and current playback to finish. Director controls start collapsed behind **Show director controls** so the transcript has more room. Temporary voice-service failures share one automatic retry with incomplete takes; **Retry voice** can then regenerate the existing reply's audio with its original wording and delivery, without rerunning the actor or director.
-
-**Voice completion now checks spoken coverage:** the live app uses its existing recognizer to catch substantial missing speech before playback, including a completed response that contains only the opening sentence. Rejected takes share the same two-attempt limit and keep their emotion/reference. Failures now include a specific safe reason code; automatic voice anchoring excludes invalid-duration and rejected takes. This adds a recognition step and is not a cure for Drama 3's documented generation limitations. [Failure diagnosis and limits](docs/VOICE_FAILURES.md).
-
-**Token-limit recovery:** a take that reaches its frame allowance is no longer rejected solely for that reason. The complete transport must validate, then the recognizer must match every normalized requested word with no extras, and a strict quiet ending must be present. Only the verified quiet suffix is trimmed, preserving a 400 ms pad. Ongoing speech with a clean recognized prefix can give the one retry a larger budget; silent stalls cannot. Words, voice and emotion stay fixed. [Recovery conditions](docs/VOICE_FAILURES.md#reaching-the-limit-does-not-reveal-what-was-spoken).
-
-**Drama 3 sampling correction:** the live launcher separates main and acoustic sampling and now masks residual audio codes outside the decoder's 1,024-entry vocabulary. The correction upgrades the existing pinned environment without changing checkpoints or CUDA dependencies. One emotion, the chosen reference and whole-reply word checks stay in place. It needs a full stack restart and real-model listening test; [evidence, update commands and rollback](docs/DRAMA3_SAMPLING.md).
-
-**Clearer voice timing:** the portal shows **Generating voice**, **Checking speech** and **Retrying voice**, with separate wall times including failed attempts. Clearly quiet tails are trimmed before recognition while preserving a 400 ms pad and the word check; paired presentation markup is cleaned without changing spoken words. These changes remove avoidable work and expose the remaining wait; a GPU speedup or improved acoustic consistency has not yet been measured. [Voice diagnosis and limits](docs/VOICE_FAILURES.md#generation-checking-and-delay).
-
-**Status: starter prototype.** CPU transport tests and browser checks pass. A short standalone Drama 3 synthesis succeeded on Surrey through the Mac SSH tunnel on 23 October 2026; [details](experiments/drama3/README.md#validation). The full live stack, combined H200 memory use, spoken quality and live response time still need validation. No model weights are included. This repository is separate from CharacterPlex and does not modify it.
-
-![Character sheet and conversation preview](docs/screenshots/studio-preview.jpg)
-
-**Surrey background launch:** after installation, submit `sbatch scripts/run_live_slurm.sbatch` from the repository on `login01` to run the three-GPU stack without keeping an allocation terminal open. It requests one four-hour job; the actual browser tunnel must still target its allocated node. [Batch setup and logs](docs/MULTI_GPU.md#background-job).
-
-## What it does
-
-- Editable identity, goal, environment, memories, boundaries, story moment and voice description.
-- Text or microphone input; record up to 30 seconds, listen back, then send.
-- Generated text and an audio player for Qwen's spoken reply; text-only replies are also available.
-- View the exact character instructions; download the character as JSON.
-- Local browser saving for the character; recent conversation context in server RAM.
-
-The original baseline uses **one recorded turn, then one reply**. The new `--live` mode streams text, validates one continuous voice take per reply and supports interruption; it is a cascaded voice pipeline, not a native full-duplex model. Neither mode implements model training or the full existing Character Studio feature set.
-
-The initial GPU trial has been reported as too slow for a live conversation. See [the voice behaviour and streaming runtime notes](docs/LIVE_VOICE.md) for the confirmed bottlenecks and the distinction between this baseline and a live call.
-
-## Preview on your laptop
-
-Use Python 3.10+ or `uv` (the setup script uses Python 3.12 with uv).
+## Preview the current interface locally
 
 ```bash
-git clone git@github.com:aleybaracatCoSTAR/Character_Studio_Qwen.git
-cd Character_Studio_Qwen
 bash scripts/setup.sh preview
-bash scripts/run.sh --preview
+bash scripts/run.sh --live --preview --port 18113
 ```
 
-Open **http://127.0.0.1:18091/**. Preview mode lets you edit and inspect character instructions. It does not download Qwen or invent AI responses.
+Open [Character Studio](http://127.0.0.1:18113/), [the archive](http://127.0.0.1:18113/archive/) or [the gallery](http://127.0.0.1:18113/archive/gallery/). Design preview starts the interface with calls disabled and does not load GPU models. A fresh preview archive is empty until you import data. The `--live` flag selects the current interface.
 
-## Run the real model
+## Run the prepared stack on Surrey
 
-Follow **[the Surrey guide](docs/SURREY.md)**. The starting target is one allocated H200, BF16, one generation at a time. There is no paid API key required by this app. Checkpoint storage is roughly 71 GB; allow additional room for dependencies and caches. Actual GPU requirements depend on context and must be measured.
-
-## Where everything is
-
-| File | Purpose |
-|---|---|
-| `frontend/index.html` | Page structure and character fields |
-| `frontend/styles.css` | Appearance and responsive layout |
-| `frontend/app.js` | Character editing, recording, chat and playback |
-| `frontend/recorder-worklet.js` | Microphone PCM capture |
-| `studio/app.py` | Python FastAPI server and HTTP endpoints |
-| `studio/characters.py` | Character schema and instructions sent to the model |
-| `studio/engine.py` | Qwen loading, generation and recent conversation context |
-| `studio/audio.py` | WAV validation, resampling and reply encoding |
-| `characters/anna.json` | Example character |
-| `live_voice/` | Continuous-mic app, turn detection, local providers and interruption |
-| `live_voice/recognition.py`, `live_voice/turns.py` | Safe recognition preparation and bounded active-call conversation memory |
-| `live_voice/listening.py`, `listening_runtime/` | Optional streaming recognition and Smart Turn service in its own environment |
-| `frontend/live.*`, `frontend/live-audio.mjs` | Live call page, controls and streamed PCM playback |
-| `scripts/run_live_stack.sh` | Start the live app and both model servers |
-| `scripts/` | Environment setup, model download and launch |
-| `slurm/` | Optional batch job for Surrey |
-
-Read [architecture](docs/ARCHITECTURE.md) for the request flow and [handoff notes](docs/HANDOFF.md) for validation, limitations and the next tests.
-
-## Optional voice comparison: Drama 3
-
-[Drama 3 test instructions](experiments/drama3/README.md) prepare a separate TTS server and three Anna voice samples, with streamed first-audio timing and playable WAV output. This tests expressive delivery; Drama 3 is not a speech-to-speech conversational model. It uses its own environment and does not replace the Qwen backend.
-
-## Checks without a GPU
+For first installation, follow [Drama 3 environment setup](experiments/drama3/README.md) and [three-GPU preparation](docs/MULTI_GPU.md). Keep the pinned working dependencies and checkpoints. For an already prepared checkout, submit once from `login01`, after stopping any previous server job you intend to replace:
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
-.venv/bin/python -m compileall -q studio live_voice scripts experiments/drama3 tests
-node --check frontend/app.js
-node --check frontend/recorder-worklet.js
-node --input-type=module --check < frontend/live.js
-node --test tests/*.test.mjs
-for script in scripts/*.sh experiments/drama3/*.sh slurm/qwen-studio.sbatch; do bash -n "$script" || exit; done
+cd "/scratch4weeks/$USER/Character_Studio_Qwen" &&
+git pull --ff-only &&
+LIVE_DEFAULT_ENGINE=baseline LIVE_VOICE_PLAYBACK=streaming \
+  sbatch scripts/run_live_slurm.sbatch --listening baseline
 ```
 
-571 Python tests cover streaming listening and Smart Turn, real loopback protocol, interim/final transcript separation, cancellation and baseline compatibility, isolated setup/download manifests, GPU launch/configuration, inherited CPU-mask cleanup, scalable archive import/indexing, guarded sampling repair, spoken coverage, character presets, model-input exports, beat replies and whole-reply delivery. 138 JavaScript tests cover the live controls, temporary listening feedback and independent character creation/persistence. Inference uses explicit test doubles; transport and shutdown checks use real temporary CPU processes and sockets. Browser checks verify creating, editing, switching and refreshing a new character. Separate browser and complete-corpus import/deduplication checks used the public snapshot without calling speech models. These do not demonstrate model quality or real GPU speed.
+The batch job requests three H200s, 24 CPUs and 256 GiB of RAM for four hours. These are allocation settings, not measured minimum requirements. A pending job has not started serving. Use the returned job ID and its `slurm-character-<job-id>.log`; wait for model readiness and Uvicorn startup, then forward port **18091** from the actual allocated node to your laptop. [Queue, tunnel and shutdown instructions](docs/MULTI_GPU.md#background-job).
 
-## Model and implementation sources
+## Developer handoff and delivery status
 
-The inference adapter targets **Transformers 5.2.0**, following [Qwen's current guidance](https://github.com/QwenLM/Qwen3-Omni#installation). Its generate return values were checked against the [5.2.0 implementation](https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/qwen3_omni_moe/modeling_qwen3_omni_moe.py). The checkpoint is [Qwen/Qwen3-Omni-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct), pinned in `scripts/download_model.py`.
+- [Architecture, model requests, APIs, persistence and container proposal](docs/DEVELOPER_ARCHITECTURE.md)
+- [Architecture diagram source](docs/diagrams/character-archive-stack.mmd)
+- [Screenshots and captions](docs/SCREENSHOTS.md)
+- [Director behaviour](docs/DIRECTOR.md) and [narrative controls](docs/NARRATIVE.md)
+- [Streaming playback, timing and checks](docs/DRAMA3_LATENCY.md#live-playback-mode)
+- [Implementation history and validation](docs/HANDOFF.md)
 
-New application code is MIT licensed. Qwen model files have their own [Apache 2.0 license and model card](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct). Models, recordings, credentials and generated media are excluded from Git.
+The frontend is HTML, CSS and JavaScript; the backend is Python/FastAPI. They currently share one app origin. **Separate containers and an application-level OpenAI-compatible facade are proposed work.** Internal model services use OpenAI-shaped inference endpoints; the live UI WebSocket is custom. Embedding retrieval and the later prompt/personality redesign are also proposals, not deployed changes.
+
+The repository retains older and alternative experiments for reference. This main handoff focuses on the two-Qwen, Whisper and Drama 3 character/archive stack. Code is MIT; checkpoint and source-data terms are separate.

@@ -1,176 +1,200 @@
 # Character Studio and Art Archive Studio developer handoff
 
-**Prepared 9 November 2026.** This document describes the current repository and a proposed container deployment. It is intended for a developer joining without the conversation history.
+**Updated 19 November 2026.** This is the main handoff for the character and archive experience using **two Qwen text LLMs, Fish Audio Drama 3 and CPU Faster-Whisper**. The reference deployment is `quality-3gpu`, `LIVE_DEFAULT_ENGINE=baseline`, with `--listening baseline`.
 
-**Implementation status:** the live application, model adapters, gallery, retrieval and Slurm launchers exist. The next delivery is separate frontend/backend containers, packaged model services and a documented OpenAI-compatible application API. Dockerfiles, Compose files and that application API do **not** exist yet. A running service must be inspected independently of repository files or a previous job ID.
+The application, model adapters, gallery, archive imports, request inspector and Slurm launchers exist. Separate frontend/backend containers, an application-level OpenAI-compatible facade, embedding retrieval and the proposed personality-prompt redesign remain work to implement. This document does not report a new GPU benchmark or a container deployment.
 
 ## 1 What we are building
 
-The project is a voice interface for authored characters. A creator supplies identity, motivation, memories, environment, behaviour rules and a director script with narrative beats. A participant can talk to the character, interrupt a reply, or test it using typed input. The director can change the character's intention and delivery as a scene progresses.
+**Character Studio** lets an author create a character with identity, motivation, environment, memories, boundaries, speaking style and a director script. A participant talks through a microphone or typed input. A performer can guide the scene with notes, emotional triggers and narrative beats, and can interrupt a reply.
 
-The same application supports **Art Archive Studio**. Robin is an example guide with access to selected local collections. Retrieval supplies relevant catalogue records or attributed archive passages. The browser can display available museum images alongside the conversation, with an optional pixel reveal. It can also search the imported catalogues directly.
+![Character Studio character creation](screenshots/character-studio-create.jpg)
 
-Import connectors cover Queering the Map, the National Gallery of Art, the Metropolitan Museum of Art, the Art Institute of Chicago, Cleveland Museum of Art, the J. Paul Getty Museum and Rijksmuseum. A connector's presence does not establish that a complete collection is imported on a particular server. Local database counts and import manifests show the actual holdings.
+**Art Archive Studio** gives an authored character access to selected local archives. Robin is the example art guide. Relevant catalogue records or attributed story passages enter the model context; available museum images appear beside chat. The gallery adds a central artwork, source details, a thumbnail trail and a pixel reveal.
 
-The target is to preserve these experiences while separating presentation from orchestration and packaging the dependencies reproducibly. The interfaces between models should be portable where they genuinely match an OpenAI API; application-specific voice, narrative and archive events must remain clearly documented.
+![Art Archive Studio artwork and conversation interface](screenshots/art-archive-studio-gallery.jpg)
 
-This is inference with pretrained checkpoints. Character-sheet edits, director notes and retrieval **do not train the model, create a LoRA, or modify its weights**. Retrieval currently uses SQLite full-text matching and additional normalization/fuzzy matching. There is no vector database, embedding service or trained retrieval model in this path.
+These are interface previews with fictional example profiles and public catalogue material. They illustrate controls and layouts, not a new live-model result. [All screenshots and capture notes](SCREENSHOTS.md).
 
-## 2 Current architecture and model placement
+This project uses pretrained checkpoints at inference time. Editing a character, adding director notes or importing an archive does not train weights or create a LoRA.
 
-The main reference profile is `quality-3gpu`, configured in [`config/live_profiles.json`](../config/live_profiles.json). All three GPUs belong to one Slurm allocation on one node. “GPU 0/1/2” below means the first, second and third positions in `CUDA_VISIBLE_DEVICES`; it does not override the scheduler's physical device assignment.
+## 2 Models and placement
 
-| Component | Exact checkpoint or implementation | Size | Placement in the reference profile |
+| Role | Exact checkpoint | Parameters | Reference placement |
 |---|---|---|---|
-| Speech recognition | `Systran/faster-whisper-base.en`, running Whisper base English via Faster-Whisper | About 74 million parameters | CPU by default |
-| Speech activity and pause detection | Backend WebRTC VAD plus application turn logic; separate browser echo/energy interruption checks | Not an LLM | CPU |
-| Character actor | `Qwen/Qwen3-30B-A3B-Instruct-2507` | 30.5B total; 3.3B active per token, MoE | Second H200, slot 1 |
-| Director | `Qwen/Qwen3-32B` | 32.8B, dense | Third H200, slot 2 |
-| Voice generation | `fishaudio/drama-3` | Advertised 35B MoE; 3B active backbone, plus audio decoding | First H200, slot 0; both serving stages share it |
-| Archive/catalogue retrieval | SQLite FTS5 and application search code | No neural model | CPU and persistent storage |
+| Participant transcription and generated-speech checking | `Systran/faster-whisper-base.en` | 74M | CPU, INT8, eight threads and one worker |
+| Character actor | `Qwen/Qwen3-30B-A3B-Instruct-2507` | 30.5B total, 3.3B active per token, MoE | Second allocated H200, slot 1 |
+| Backstage director | `Qwen/Qwen3-32B` | 32.8B dense | Third allocated H200, slot 2 |
+| Text to speech | `fishaudio/drama-3` | Advertised 35B MoE, 3B active backbone, with audio decoding | First allocated H200, slot 0; both serving stages share it |
 
-The actor and director use BF16 in these profiles. They are separate model processes; the actor is not split over the three GPUs. GPU budgets in configuration reserve capacity and are not measured minimum VRAM requirements. More GPUs let us load separate, larger models; they do not improve an unchanged checkpoint's knowledge automatically.
+“First/second/third” refers to positions in Slurm's `CUDA_VISIBLE_DEVICES` allocation. It does not mean the application may choose physical GPUs belonging to another job. The actor and director each run their own model process; the actor is not spread over all three GPUs.
 
-There are also a compact `shared` profile using `Qwen/Qwen3-4B-Instruct-2507` and a two-GPU profile using the larger actor but sharing its server for director requests. The three-GPU batch launcher deliberately chooses `quality-3gpu`.
+The actor and director are **text LLMs**. Drama 3 is the voice model. Drama's serving runtime is named **vLLM-Omni**; that name does not mean the Qwen3-Omni model is used in this stack. Whisper handles English recognition on CPU. Backend WebRTC VAD detects speech/pause boundaries; the browser has separate echo/energy checks for interruption.
 
-**Optional listening experiment:** `--listening nemotron-smart-turn` replaces inbound recognition with `nvidia/nemotron-speech-streaming-en-0.6b` on the director's GPU and `smart-turn-v3.2-cpu.onnx` on CPU. The director's GPU budget is reduced to make space. CPU Faster-Whisper still loads because it also checks generated Drama speech. This does not request a fourth GPU and is not the default. See [`docs/LISTENING_EXPERIMENT.md`](LISTENING_EXPERIMENT.md).
+The profile and pinned actor/director revisions are in [`config/live_profiles.json`](../config/live_profiles.json). Model GPU budgets are reservations, not measured minimum VRAM requirements. The batch job requests three H200s, 24 CPUs and 256 GiB host RAM for four hours.
 
-The diagram source is [`docs/diagrams/current-architecture.mmd`](diagrams/current-architecture.mmd). It includes the alternative native speech route described below.
+Primary references: [Qwen actor](https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507), [Qwen director](https://huggingface.co/Qwen/Qwen3-32B), [Drama 3](https://huggingface.co/fishaudio/drama-3), [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper) and [Whisper model sizes](https://github.com/openai/whisper#available-models-and-languages). Checkpoint terms are separate from this repository's MIT code license.
 
-## 3 One conversation turn with Qwen and Drama 3
+## 3 The conversation pipeline
 
-![Current Qwen and Drama pipeline](diagrams/baseline-current.svg)
+![Whisper recognition, archive context, separate Qwen director and actor, and Drama 3 voice](diagrams/character-archive-stack.svg)
 
-1. The browser sends 16 kHz mono PCM16 audio over the WebSocket. Recognition can start during a pause; only the final accepted utterance enters context. Typed input bypasses recognition.
-2. The backend retrieves up to three bounded source excerpts, when enabled. It combines these with the character sheet, heard conversation and current narrative state.
-3. The separate director is **awaited on the current turn** for guidance on intention, emotion, delivery, triggers and beats. Additional between-turn story checks also exist.
-4. The actor streams reply text into chat. After its **complete reply text** is available, Drama 3 synthesizes the whole reply using one delivery cue and one frozen voice reference.
-5. Streaming mode forwards valid PCM deltas immediately, with a 120 ms browser reserve and a complete final drain. Spoken-word checking finishes later. A failed take is reported without automatically replaying an already heard prefix.
+[Editable Mermaid source](diagrams/character-archive-stack.mmd) · [PNG for a board or presentation](screenshots/character-archive-stack.png).
 
-`LIVE_VOICE_PLAYBACK=streaming` removes the complete-take playback gate. `checked` retains checking before playback. Neither mode yet feeds partial actor text into TTS. Recognition, retrieval, direction and actor generation still contribute to the delay. Measure microphone-to-first-sound separately from model first-byte time; streaming alone does not guarantee complete or correct generated speech.
+1. The browser sends microphone PCM to the backend. Typed input bypasses recognition. Whisper finalizes the participant's words after the accepted pause.
+2. The backend prepares the character definition, heard conversation, current scene and any retrieved archive records. Search results and display state remain distinguishable from authored character facts.
+3. When enabled, the director is awaited on this turn. It proposes an intention, emotion, vocal delivery and any trigger/beat decision. Python validates the result and applies performer and story rules.
+4. The actor receives the latest question with this context and private direction. Its text streams into chat.
+5. After the actor's **complete reply text** is available, Drama 3 synthesizes one continuous take using one fixed voice reference and delivery cue.
+6. In the default streaming playback mode, valid 44.1 kHz PCM reaches the browser as it arrives. A small playback reserve and final drain protect delivery. Spoken-word checking can still run after release.
+7. The browser acknowledges played audio. Heard-history retention and interruption handling use these acknowledgements, rather than treating generated or received text as already heard.
 
-## 4 Native streaming Qwen3 Omni alternative
+This is a **turn-based, cascaded voice pipeline with barge-in**. It is not continuous full-duplex speech-to-speech. Streaming playback removes the full-take playback gate; it does not yet overlap partial actor text with TTS. A post-stream check cannot prevent the listener hearing a faulty take. Audio already released is not automatically replayed after failure. The alternative `LIVE_VOICE_PLAYBACK=checked` retains checking before playback. [Playback details](DRAMA3_LATENCY.md#live-playback-mode).
 
-![Native Qwen3 Omni alternative](diagrams/native-alternative.svg)
+The backend permits one active call per process. CPU fixtures and preview screenshots do not establish multi-user capacity, H200 delay or acoustic quality.
 
-[`experiments/qwen_stream/`](../experiments/qwen_stream/) preserves the same character, director and archive experience but replaces the separate text actor plus Drama 3 with `Qwen/Qwen3-Omni-30B-A3B-Instruct`.
+## 4 What the two Qwen models receive
 
-| Allocated GPU position | Native profile component |
-|---|---|
-| First | Thinker: approximately 30B total / 3B active, with multimodal encoders |
-| Second | Talker: approximately 3B total / 0.3B active, its prediction components, and Code2Wav, approximately 200M |
-| Third | Separate `Qwen/Qwen3-32B` director |
+The backend constructs new model requests each turn. Their conversation histories are bounded selections, not unlimited transcripts or permanent model memory. The character sheet is captured when a call starts; supported director, story and voice updates have separate live controls.
 
-The component counts differ from the text actor's size. Stage placement is defined in `experiments/qwen_stream/deploy_overrides.json` and `runtime.py`.
-
-CPU recognition provides the director/retrieval transcript. Original recorded audio also reaches Omni, which produces text and 24 kHz audio directly. Native built-in voices replace Drama reference WAVs.
-
-Run **one three-GPU stack at a time**. The UI selector chooses an available engine; it does not launch services. Compare the same character, listening mode, archive scope and prompts.
-
-Both routes are turn-based with **barge-in**. Sustained new speech can cancel a reply and start another turn. They do not continuously generate while listening as a full-duplex system would. Browser echo rejection still needs microphone/speaker testing. See [`interruptions`](INTERRUPTIONS.md).
-
-## 5 Implemented process and API boundaries
-
-The frontend is plain HTML, CSS and JavaScript modules. The live Python FastAPI/Uvicorn process currently serves both static assets and application APIs from the same origin. `/`, `/archive/` and `/archive/gallery/` share that backend. The older recorded-turn prototype also remains in the repository; its `/api/chat` behaviour is not the live protocol described here.
-
-| Boundary | Current default | Compatibility and responsibility |
+| Input | Director | Actor |
 |---|---|---|
-| Browser to app | HTTP and `/api/live` WebSocket, port 18091 | Custom application API: character setup, narrative, sources, image status, audio, interruption, inspection and playback acknowledgements |
-| App to actor | `POST /v1/chat/completions`, port 18092 | OpenAI-shaped text chat; streamed deltas; local alias `live-character` |
-| App to director | `POST /v1/chat/completions`, port 18094 | OpenAI-shaped chat with structured JSON guidance; alias `live-director` |
-| App to Drama 3 | `POST /v1/audio/speech`, port 18093 | OpenAI-shaped route with runtime-specific `ref_audio`, `ref_text`, sampling and SSE completion extensions |
-| App to native Omni | `POST /v1/chat/completions`, port 18097 | Runtime-specific multimodal SSE content and audio metadata; requires the existing Omni adapter |
-| App to optional listener | HTTP plus WebSocket, port 18095 | Custom private recognition/turn-detection service |
+| Character | All live character fields except `speaker` | English instructions built from the character fields |
+| Latest input | `latest_participant_message` in the situation JSON | Latest user message in the conversation |
+| Heard history | Up to 3,000 characters with narrative, otherwise 6,000 | Up to 10,000 characters, including selected relevant older exchanges |
+| Narrative | Current beat, timing, hold, heard evidence and short outline | Current scene, goal, private note and emotional state |
+| Archive | Retrieved records and source/display constraints | The same retrieved evidence and source/display constraints |
+| Director plan | Previous intention and current settings | Newly applied intention and emotion; vocal direction also feeds TTS |
 
-`/api/live` is **not OpenAI Realtime**. An OpenAI client cannot point at this WebSocket unchanged. The backend currently provides orchestration, not an application-level `/v1/chat/completions` facade for a complete character conversation.
+These history bounds are **characters, not tokens**, separate from character/instruction/archive text. The call's bounded memory can retrieve up to three older exchanges. Prior AI speech is retained according to successful playback acknowledgements; interrupted unheard output is not treated as a completed reply. Private stage cues do not become participant memories. Ending a call clears its RAM-only conversational state.
 
-### Live wire contract to preserve
+The director's final user message contains a **JSON string** describing the situation. Its HTTP response wraps another JSON string in `choices[0].message.content`; the backend parses and validates it as a `DirectorPlan`. An illustrative decoded plan is:
 
-The client opens `/api/live` from the exact application origin and sends a `start` JSON message containing character, engine and applicable voice, archive, director and narrative settings. The server returns `ready`, including input/output sample rates. The app permits one active call per backend process; a second call is rejected, not queued.
+```json
+{
+  "intention": "Explain the next step and wait for confirmation.",
+  "emotion": "calm",
+  "delivery": "Warm, clear and unhurried",
+  "event": "none",
+  "trigger_action": "hold",
+  "evidence": "",
+  "beat_done": false,
+  "beat_evidence": ""
+}
+```
 
-Client binary messages contain raw little-endian mono PCM16 at 16 kHz, with no WAV header, at most 8,192 bytes per message. Server binary messages contain an **8-byte big-endian header**—unsigned turn ID and sequence ID—followed by raw little-endian mono PCM16. Output is 44,100 Hz for Drama 3 or 24,000 Hz for native Omni. JSON events carry text, sources, narrative state, errors and phrase boundaries.
+The actor receives character instructions, archive messages when enabled and conversation messages. It returns spoken dialogue through SSE text deltas, not a director-plan object. The director does not directly speak to the visitor or execute application actions. The full plan is not pasted into the actor verbatim.
 
-`played` acknowledges a phrase only after its samples actually play; `playback_done` follows the complete drain. These acknowledgements govern heard-history retention and microphone release. A Unity or other client must implement them, along with turn IDs, native-rate playback, buffering and cancellation. Receiving bytes alone is not equivalent to hearing a reply.
+Use **See what the model sees** to inspect the actual provider-boundary payload for a turn, select a stable request and download text or recent JSON. Reference audio bytes are omitted from inspection. [Inspector and export behaviour](MODEL_INPUTS.md).
 
-## 6 Proposed container deployment
+## 5 Narrative and voice controls
 
-![Proposed separate frontend and backend containers](diagrams/target-containers.svg)
+![Narrative beat editor showing goals, entry notes and timing](screenshots/narrative-beats-preview.jpg)
 
-The target diagram is [`docs/diagrams/target-containers.mmd`](diagrams/target-containers.mmd). Everything in this section is proposed work, not an existing Compose configuration.
+Narrative beats are Python application state. Each beat has a title, goal, private entry note, emotion, delivery and minimum/maximum duration. Modes are performer/manual, timed or director-guided. In director mode, Python checks current-beat evidence, elapsed minimum time and performer hold before accepting a completion proposal. Maximum-time and manual transitions follow separate rules.
 
-**Frontend container:** serve versioned static assets and act as the public reverse proxy. Proxy `/api/` and the WebSocket to the backend without buffering upgraded traffic. Keep one browser origin so current Origin checks and relative URLs remain meaningful. Forward the intended public host/protocol through a deliberately trusted proxy configuration; do not remove Origin validation to make deployment work.
+Entering a beat can queue a private cue that asks the character to initiate a reply once current speech/playback permits. It is a backend-generated direction, not a new participant utterance. Fixed identity remains separate from changing emotion or scene state. [Narrative](NARRATIVE.md) · [Director](DIRECTOR.md).
 
-**Backend container:** run the existing orchestration and archive APIs independently from the static server. Use one worker initially to preserve the one-call lock, in-memory turn state and resource limits. Model endpoint URLs become private service URLs such as `http://actor:18092`; the exact names are deployment configuration, not hardcoded promises. Add distinct liveness and model-readiness reporting.
+**Robin's shipped starter disables director calls and narrative beats.** The reference deployment still loads the director server, but an ordinary Robin turn does not call it until the author enables the director. Saved browser profiles can retain different settings. Anna, Karim and KADEN provide other rehearsal starting points.
 
-**Model service containers:** isolate actor, director and Drama 3 runtimes and their pinned CUDA/Python dependencies. Mount downloaded checkpoints read-only, then give writable caches and logs their own locations. Reproduce the currently working vLLM/vLLM-Omni revisions and sampling repair; do not replace them with unpinned latest dependencies during packaging. Optional listener and native Omni services belong to explicit deployment profiles. The native profile replaces actor/TTS rather than loading every GPU model by default.
+![Voice settings including emotion, direction and a named custom reference](screenshots/art-archive-voice-settings.jpg)
 
-### Packaging and network interfaces
+Female/Male use bundled references; Custom pairs a WAV with its exact transcript. Named custom voices persist in browser IndexedDB and profiles keep an opaque voice ID. Changing public origin/browser or clearing storage affects these recordings. Emotion and vocal direction can update the next reply; voice identity/reference changes require ending the call. One application-level cue per reply does not guarantee consistent model performance. [Voice settings](ARCHIVE_GALLERY.md#voice-and-delivery).
 
-**Networking and GPU ownership:** only the frontend entry point should be public. Model and database-related ports stay on an internal network. Current scripts bind services to loopback; cross-container deployment needs controlled internal binds and URL/configuration changes. The listening client currently validates loopback URLs, so supporting a listener service name requires an explicit private-endpoint policy and tests, not merely a Compose variable. Map the same allocated devices into the intended roles and preserve single-sequence serving limits initially.
+## 6 Archive retrieval and images
 
-Docker Compose is a sensible development target on an approved GPU host. **Do not assume Docker or a Docker daemon is permitted on Surrey.** A cluster-approved Apptainer/Singularity approach may be appropriate, launched inside Slurm with the GPU allocation exposed, but support, image distribution and network/storage policy must be confirmed with the cluster team. Containerization must not bypass Slurm or start GPU workloads on a login node.
+The current archive path is **lexical RAG**: SQLite FTS5, a bounded artist/title/date index, spelling tolerance and medium/image filters. There is **no embedding model, vector database or neural reranker** in this path. A proposal to add these is separate from the implemented baseline.
 
-### Proposed portable API facade
+Museum connectors cover NGA, the Met, Chicago, Cleveland, Getty and Rijksmuseum. QTM stories use their own store. Full and smaller topic imports exist, but connector support does not prove a full collection is imported on a given server. Inspect its counts, selected collections and import manifests.
 
-Retain the existing UI WebSocket initially. Add a separate, versioned OpenAI-compatible **text** facade for external clients: standard messages and streaming text deltas map to an explicitly selected character/session. Define how clients select narrative and archive settings, how source attribution is returned, which features require custom extensions, and how cancellation works. Publish contract tests and an OpenAPI description.
+Each reply receives up to three relevant records, at most 2,000 excerpt characters each and 6,000 total excerpt characters, plus bounded metadata and source/image links. The entire database is not included in the prompt. The same retrieved evidence is supplied to director and actor. Source text is quoted data, rather than permission to override character or system instructions.
 
-For speech, distinguish a standard `/v1/audio/speech` capability from voice-cloning or streamed-PCM extensions. A standard-client fallback could return a completed WAV from a service adapter, while the UI retains its lower-latency custom stream. Do not claim OpenAI Realtime compatibility unless its session, event, audio and interruption contracts are actually implemented and tested. Model swapping needs capability negotiation; an OpenAI-shaped URL alone does not standardize voice references, director JSON support or Omni's native SSE format.
+The gallery uses source image URLs; the Art Institute of Chicago route can use the vetted backend relay at `/api/archive/museum-images/aic/{identifier}`. Preserve that API route when separating the frontend. The actor and director do not inspect image pixels. An eligible URL is not proof that the browser loaded it; selected-record identity and load/failure events ground claims about what the visitor can see. A missing image does not mean the catalogue record is missing. Requests for more artworks retain the meaningful subject and filters, exclude seen/failed selections, and keep hesitation/status follow-ups from becoming accidental title searches.
 
-The facade should specify `GET /v1/models`, chat request/response and SSE schemas, error bodies, bearer authentication, cancellation and a documented method of selecting a character/session. These are proposed contracts to implement and test with an ordinary OpenAI SDK pointed at the application's base URL. Current exact-Origin checks are not authentication; the prototype has no public account/access-control layer.
+[Archive import and record format](RAG_COLLECTIONS.md) · [Whole museum imports](FULL_MUSEUM_IMPORTS.md) · [QTM database](QTM_DATABASE.md) · [Gallery behaviour](ARCHIVE_GALLERY.md).
 
-### Container delivery files
+## 7 Backend and API boundaries
 
-The implementation should supply a frontend Dockerfile, backend Dockerfile, pinned model-runtime build definitions, a Compose deployment with explicit baseline/native profiles, and a versioned configuration example containing no secrets. Include an approved cluster launch recipe, health/readiness checks, database migration/import commands and backup/restore instructions. Each image must have a reproducible dependency lock and build reference. Model downloads belong in a preparation step and mounted storage, rather than image layers. The proposed deployment diagram does not imply these files have already been created.
+The frontend is plain HTML, CSS and JavaScript modules. Python FastAPI/Uvicorn currently serves static assets and application endpoints from one origin. The routes `/`, `/archive/` and `/archive/gallery/` use the same live backend.
 
-## 7 Persistence archives and backups
-
-| Data | Implemented location/lifetime | Container target |
+| Boundary | Default endpoint | Contract |
 |---|---|---|
-| Authored character profiles and settings | Browser localStorage, scoped to origin | Preserve browser export/import first; cross-device/account storage is a separate API/schema task |
-| Saved custom voice WAVs and exact transcripts | Browser IndexedDB; character JSON stores only the voice ID | Preserve or migrate clips when the public origin changes; server storage needs an authenticated design |
-| Call context, heard history, current name and delivery | Backend RAM for the call | Keep session-owned; no implied persistent conversation memory |
-| Queering the Map collection | `archive.sqlite3` | Durable writable archive volume; retain source attribution/provenance |
-| Museum catalogues/search indexes | `collections.sqlite3` | Same managed archive volume with bounded imports |
-| Source downloads and import state | Archive import directories | Preserve downloads, hashes, dates, cursors and import state |
-| Model weights | Explicit model-store directories outside Git | Read-only checkpoint mounts; separate writable runtime caches |
+| Browser to backend | Port 18091, `/api/live` | Custom WebSocket for character, narrative, sources, image status, audio, inspection and acknowledgements |
+| Backend to actor | Port 18092, `/v1/chat/completions` | OpenAI-shaped text chat, alias `live-character`, streamed deltas |
+| Backend to director | Port 18094, `/v1/chat/completions` | OpenAI-shaped chat, alias `live-director`, structured JSON plan |
+| Backend to Drama 3 | Port 18093, `/v1/audio/speech` | OpenAI-shaped route plus reference/audio/sampling and SSE completion extensions |
 
-The archive directory resolves from `LIVE_ARCHIVE_DIR`, otherwise `$LIVE_VOICE_STORE/archive`, otherwise `~/.local/share/character-studio/archive`. Surrey examples use `/scratch4weeks/$USER/live-voice-store/archive`; scratch storage is not a durable backup. Keep corpus files, generated databases, caches and voices out of Git and container image layers.
+The UI WebSocket is **not OpenAI Realtime**. The backend does not currently expose a standard application-level `/v1/chat/completions` facade for a complete authored-character session.
 
-Persistent SQLite currently uses rollback journalling. Queering the Map calls copy the database into RAM. Museum calls copy the whole catalogue database to a temporary disk snapshot, then build a scoped search index. Persistent storage, temporary disk and RAM must therefore be sized separately; a call does not copy only its three retrieved records. Do not change to WAL or allow multiple independent import writers on shared cluster storage without validating locking behaviour. One backend/container owns writes initially; optional import workers must coordinate with that owner.
+The client sends `start` JSON, then raw little-endian mono PCM16 at 16 kHz, up to 8,192 bytes per binary message. Server audio has an 8-byte big-endian header containing unsigned turn and sequence IDs, followed by little-endian mono PCM16 at 44,100 Hz. JSON events carry text, sources, narrative and error state. Clients must support cancellation and acknowledge actual playback with `played` and `playback_done`; receiving bytes is not equivalent to hearing them. Keep the existing exact-Origin check and same-origin proxy behaviour during separation. Origin validation is not authentication.
 
-Back up with a documented SQLite-consistent procedure, preferably while imports and the app are stopped, or using SQLite's backup API. Include both databases, provenance manifests, selected configuration and resumable import state. Store an independent copy outside temporary scratch. Restore into an isolated directory and verify collection counts, sample searches, image/source links and a new call before declaring the backup valid. Record source removal/update handling; imports are not automatically full deletion synchronization.
+## 8 Storage and runtime requirements
 
-Museum images generally remain source URLs. Records can lack images, and image hosts can fail independently. Browser load status, the selected work and per-call browsing constraints enter model context. The browsing update retains the subject and medium through follow-ups, filters for image links before ranking, and excludes failed selections. CPU fixtures cover these flows; they do not establish real-model consistency or image-host reliability.
-
-## 8 Repository map and handoff order
-
-| Start here | Purpose |
+| Data | Current home |
 |---|---|
-| `frontend/live.html`, `live.js`, `live.css` | Live form, chat, state and session controls |
-| `frontend/live-gallery.mjs`, `gallery.css`, `pixelate-reveal.mjs` | Gallery selection, artwork display and reveal |
-| `frontend/live-audio.mjs`, `live-voices.mjs`, `live-characters.mjs` | PCM playback/acknowledgements and browser persistence |
-| `studio/characters.py` and `characters/` | Character schema, prompt construction and example profiles |
-| `live_voice/app.py`, `session.py`, `turns.py` | API entry points, orchestration, heard-history lifecycle |
-| `live_voice/providers.py`, `voice.py`, `playback_policy.py` | Text/TTS adapters, stable delivery and playback policy |
-| `live_voice/director.py`, `narrative.py`, `reactions.py` | Structured director plans, narrative beats and triggers |
-| `live_voice/collections.py`, `archive_database.py`, `artwork_requests.py` | Search, persistence, visual references and source grounding |
-| `config/live_profiles.json`, `live_voice/deployment.py` | Pinned text checkpoints, budgets and allocated-device mapping |
-| `scripts/run_live_stack.sh`, `run_live_slurm.sbatch`, `run_live_tts.py` | Current single-node launch, cleanup and speech-stage configuration |
-| `experiments/drama3/`, `experiments/qwen_stream/`, `listening_runtime/` | Isolated model runtimes and alternative listening/native speech paths |
-| `tests/` and `docs/` | CPU/transport/browser regression coverage and deployment notes |
+| Character profiles and authored settings | Browser localStorage, scoped to origin |
+| Named custom voice WAVs and transcripts | Browser IndexedDB |
+| Heard conversation and current scene state | Backend RAM for the call |
+| QTM stories | `archive.sqlite3` |
+| Museum records, metadata and image links | `collections.sqlite3` |
+| Downloaded source files and resumable imports | Archive import directories |
+| Checkpoints and service logs | Model-store directories outside Git |
 
-### Implementation and acceptance
+The archive directory resolves from `LIVE_ARCHIVE_DIR`, then `$LIVE_VOICE_STORE/archive`, then `~/.local/share/character-studio/archive`. Surrey examples use `/scratch4weeks/$USER/live-voice-store/archive`. Actor, director and STT checkpoints live under `live-voice-store/`; Drama uses its separate `drama3-test-store/`. The app/CPU recognition environment is `.venv-live`; the pinned Drama/vLLM runtime is `.venv-drama3`.
 
-1. Record the working commit, checkpoint revisions, package pins and current status response. Rehearse a short baseline conversation and save the complete latency breakdown.
-2. Build frontend/backend separation with a same-origin proxy. Preserve the live protocol, image events, prompt-inspection downloads and playback acknowledgements before changing models.
-3. Package each runtime with explicit GPU mapping, mounted checkpoints, private networking, orderly shutdown and visible readiness. Keep baseline/native profiles mutually exclusive initially.
-4. Add durable storage/backup procedures and a versioned configuration example. Keep credentials in runtime secret injection or an approved secret store; never bake tokens or private keys into images.
-5. Define and implement the text compatibility facade and speech adapters, with standard-client smoke tests and documented extensions. Defer multi-user serving and cross-device profile storage until they have their own persistence/concurrency design.
+Current QTM calls copy the database into RAM. Museum calls copy the full catalogue database to temporary disk and build scoped search indexes. Size RAM, persistent storage and temporary disk separately. SQLite full-text indexes already persist. Reusing the additional per-call artist/title and browsing indexes without copying the whole database is proposed optimisation work. Persistent SQLite uses rollback journalling; retain one coordinated writer initially and verify shared-filesystem locking before changing journal/concurrency design.
 
-Acceptance checks should cover clean startup with an existing checkpoint cache; no hidden model download; GPU allocation isolation; stop/restart without orphan processes or occupied ports; reverse-proxied Origin/WebSocket operation; both output sample rates; speech interruptions and heard-history correctness; image selection/load failure; database import, restart, backup and restore; and identical prompt/voice comparison across engines. CPU fixtures establish application behaviour, not H200 latency or perceptual voice quality. Measure microphone-to-first-sound, first model audio, completion, retries, skipped words and voice consistency on the real GPU deployment.
+Scratch is temporary, not an independent backup. Back up databases consistently, together with provenance/import state, then test restore and searches. Database dumps, checkpoint downloads, private transcripts, voice recordings and credentials do not belong in Git or image layers.
 
-## 9 Primary references and existing guides
+## 9 Run and verify the reference stack
 
-Model sizes and architectural labels follow [Qwen3-30B-A3B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507), [Qwen3-32B](https://huggingface.co/Qwen/Qwen3-32B), [Fish Audio Drama 3](https://huggingface.co/fishaudio/drama-3), and the [vLLM-Omni architecture overview](https://docs.vllm.ai/projects/vllm-omni/en/latest/design/architecture_overview/). Recognition references: [Whisper](https://github.com/openai/whisper), [Faster-Whisper checkpoint](https://huggingface.co/Systran/faster-whisper-base.en), [Nemotron streaming ASR](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b), and [Smart Turn](https://github.com/pipecat-ai/smart-turn).
+For a CPU-only interface preview:
 
-Repository guides remain the implementation-specific authority: [multi-GPU deployment](MULTI_GPU.md), [Drama latency](DRAMA3_LATENCY.md), [native Omni experiment](../experiments/qwen_stream/README.md), [model-input inspection](MODEL_INPUTS.md), [archive database](QTM_DATABASE.md), [gallery](ARCHIVE_GALLERY.md), and [handoff history](HANDOFF.md). Older documents can describe earlier complete-take or recorded-turn behaviour; use this document with the current code and the running `/api/status` response.
+```bash
+bash scripts/setup.sh preview
+bash scripts/run.sh --live --preview --port 18113
+```
+
+The `--live` flag selects the current UI. Preview calls are disabled and no GPU checkpoint loads. A fresh archive is empty until populated.
+
+For first GPU preparation, follow [Drama setup](../experiments/drama3/README.md) and [quality-3gpu preparation](MULTI_GPU.md). Do not use the older recorded-turn prototype's setup recipe as this stack's runtime recipe. For an already prepared checkout on `login01`:
+
+```bash
+cd "/scratch4weeks/$USER/Character_Studio_Qwen" &&
+git pull --ff-only &&
+LIVE_DEFAULT_ENGINE=baseline LIVE_VOICE_PLAYBACK=streaming \
+  sbatch scripts/run_live_slurm.sbatch --listening baseline
+```
+
+Check the queue first, stop the actual prior server job when replacing it, and submit only once. A pending batch job may have no log yet. Use the returned ID, wait for it to run and for model health/Uvicorn readiness, then tunnel port 18091 from the actual allocated node. Do not request a competing interactive GPU allocation while the batch job waits. [Queue, log, SSH tunnel and shutdown](MULTI_GPU.md#background-job).
+
+Verify `/api/status`, character creation, typed and microphone replies, director on/off, manual beat changes, one continuous voice take, interruption/heard history, image selection/load failure, archive restart persistence, saved voices and request downloads. Local tests cover application contracts. Measure microphone-to-first-sound, full reply time, retries, skipped words and character consistency on the GPU system; a first-byte serving metric is not end-to-end conversation delay.
+
+## 10 Proposed developer delivery
+
+Package the current reference stack with separate frontend and backend images. A public frontend/reverse proxy should serve static assets and proxy the app API/WebSocket at one browser origin. A backend container should own sessions and archives; actor, director and Drama services should stay private, with explicit allocated-GPU mapping. Keep one backend worker/call initially.
+
+Mount pinned checkpoints read-only, with separate writable cache/log/temp locations and a durable archive volume. Supply Dockerfiles, dependency locks, a versioned configuration example, a Compose profile, readiness checks, coordinated imports and backup/restore instructions. These files do not exist yet. On Surrey, confirm an approved container runtime and run inside Slurm; do not assume a Docker daemon is available or bypass allocations.
+
+Current inference services bind loopback. Container separation requires deliberate internal bind addresses, service URLs and trusted proxy configuration. Add authenticated access for any public deployment. Keep credentials in runtime secrets rather than image layers.
+
+Implement an application-level OpenAI-compatible text facade with `GET /v1/models`, chat request/response and streaming schemas, errors, authentication, character/session selection and cancellation. Document voice-reference and streamed-audio extensions separately. Preserve the current live protocol while compatibility is built and tested; a familiar URL alone does not establish OpenAI Realtime compatibility.
+
+For retrieval, benchmark a pinned embedding model combined with existing exact/fuzzy search and image/source constraints. For conversation, compare a prompt variant with one clear current scene, fewer repeated goals/fears and short personality examples. These proposals have not changed the running baseline. Additional models or shorter prompts need measured benefit before becoming defaults.
+
+## 11 Main implementation files
+
+| Files | Responsibility |
+|---|---|
+| `frontend/live.html`, `live.js`, `live.css` | Current character editor, chat and controls |
+| `frontend/live-gallery.mjs`, `gallery.css`, `pixelate-reveal.mjs` | Artwork selection, display and reveal |
+| `frontend/live-audio.mjs`, `live-voices.mjs`, `live-characters.mjs` | Audio/acknowledgements and browser persistence |
+| `studio/characters.py`, `characters/` | Character schema, prompt construction and examples |
+| `live_voice/app.py`, `session.py`, `turns.py` | API entry point, orchestration and heard history |
+| `live_voice/providers.py`, `voice.py`, `playback_policy.py` | Model requests, speech checks and playback policy |
+| `live_voice/director.py`, `narrative.py`, `reactions.py` | Director JSON, beats and contextual triggers |
+| `live_voice/collections.py`, `archive_database.py`, `artwork_browsing.py` | Persistent retrieval and per-call browsing |
+| `config/live_profiles.json`, `live_voice/deployment.py` | Checkpoint pins and allocated-device mapping |
+| `scripts/run_live_stack.sh`, `run_live_slurm.sbatch`, `run_live_tts.py` | Launch, readiness, speech-stage placement and shutdown |
+
+[Implementation history and validation](HANDOFF.md) retains prior work. Other model/engine experiments remain in the repository for reference and are outside this main character/archive handoff.

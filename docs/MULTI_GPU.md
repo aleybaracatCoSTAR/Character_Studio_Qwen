@@ -1,6 +1,6 @@
 # Multi-GPU quality profiles
 
-**Optional listening experiment:** [Nemotron + Smart Turn setup](LISTENING_EXPERIMENT.md) adds GPU streaming input recognition to `quality-3gpu`. Pass `--listening nemotron-smart-turn` to the interactive launcher or batch script. Nemotron shares the third allocated GPU with a director budget of 75%; Smart Turn runs on CPU. The baseline budgets below remain unchanged when that option is absent. This does not request a fourth GPU.
+**Reference character/archive deployment:** `quality-3gpu` runs two separate Qwen text models and Drama 3, with CPU Faster-Whisper selected by `--listening baseline`. Start with the [current architecture handoff](DEVELOPER_ARCHITECTURE.md) and [screenshots](SCREENSHOTS.md). This guide's one- and two-GPU profiles remain alternatives; the main developer handoff uses three GPUs.
 
 The live app can run its narrative director and character actor on larger models, with Drama 3 on its own GPU. These are **single-node H200 profiles**. Additional devices make space for those models; they do not change the knowledge or acting skill of an unchanged checkpoint. Quality and latency need rehearsal comparisons.
 
@@ -19,9 +19,10 @@ Official model cards: [Qwen3-30B-A3B-Instruct-2507](https://huggingface.co/Qwen/
 For a server you want to keep running after closing your allocation terminal, submit the included batch file from `login01`. It requests one node in `proto`, three H200s, 24 CPUs and 256 GiB of host memory for four hours. It starts the existing `quality-3gpu` stack once in the foreground of that batch allocation; no additional model installation or download is performed.
 
 ```bash
-cd "/scratch4weeks/$USER/Character_Studio_Qwen"
-GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull --ff-only
-sbatch scripts/run_live_slurm.sbatch
+cd "/scratch4weeks/$USER/Character_Studio_Qwen" &&
+GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull --ff-only &&
+LIVE_DEFAULT_ENGINE=baseline LIVE_VOICE_PLAYBACK=streaming \
+  sbatch scripts/run_live_slurm.sbatch --listening baseline
 ```
 
 `sbatch` prints the new job ID and returns to the login prompt. The job can remain pending until resources are available. Once it starts, its combined app/startup output is in `slurm-character-JOB_ID.log` in this repository directory; replace `JOB_ID` with the returned number. Service details remain under `live-voice-store/logs/`. These local job logs are ignored by Git.
@@ -121,3 +122,8 @@ sacct -j JOB_ID --format=JobID,User,State%30,Reason%45,ExitCode,Elapsed,Timelimi
 `SIGKILL`/`0:9` alone does not establish out-of-memory. A per-step `MaxRSS` is that step's peak, not a timestamped simultaneous total across steps; do not add separate peaks as proof that the job exceeded its allocation. A finished job can disappear from `squeue` while remaining in `sacct`. If the original interactive allocation is cancelled, work started through another overlapping step can be terminated with it. Match cancellation UID with `id -u` and use the scheduler's `Reason` or Surrey support when the cause remains unclear. [Slurm accounting fields](https://slurm.schedmd.com/sacct.html).
 
 **Validation:** model identities and pinned revisions were checked against their official Hugging Face repositories. CPU tests validate allocation mapping, distinct roles, bounded budgets and launch arguments. No new H200 allocation was submitted and these quality profiles have not yet been GPU-smoke-tested. Preserve the working dependency pins if a first load fails, and inspect the relevant log before changing packages.
+
+
+## Separate listening experiment
+
+**Optional listening experiment:** [Nemotron + Smart Turn setup](LISTENING_EXPERIMENT.md) adds GPU streaming input recognition to `quality-3gpu`. Pass `--listening nemotron-smart-turn` to the interactive launcher or batch script. Nemotron shares the third allocated GPU with a director budget of 75%; Smart Turn runs on CPU. The baseline budgets below remain unchanged when that option is absent. This does not request a fourth GPU.

@@ -1,0 +1,20 @@
+flowchart LR
+  Browser["Browser microphone: mono PCM16 at 16 kHz; or typed input"]
+  Whisper["CPU: Faster-Whisper base.en, 74M, INT8; WebRTC VAD"]
+  Context["FastAPI backend: character + heard history + current beat"]
+  Archive[("SQLite archive: FTS5 + tolerant search, retrieved source records")]
+  Director["Director when enabled: Qwen3-32B, 32.8B dense; H200 GPU slot 2"]
+  Actor["Actor: Qwen3-30B-A3B-Instruct-2507; 30.5B total / 3.3B active; H200 GPU slot 1"]
+  Drama["Fish Drama 3: 35B MoE / 3B active backbone, plus audio decoder; H200 GPU slot 0"]
+  Gallery["Same browser: voice playback and gallery images; turn-based with barge-in"]
+
+  Browser -->|"microphone audio"| Whisper
+  Browser -->|"typed message bypasses ASR"| Context
+  Whisper -->|"final transcript"| Context
+  Archive -->|"bounded relevant excerpts"| Context
+  Context --> Director
+  Context --> Actor
+  Director -->|"current-turn plan, emotion and beat guidance"| Actor
+  Actor -->|"complete reply text; one fixed delivery"| Drama
+  Drama -->|"streamed 44.1 kHz mono PCM16"| Gallery
+  Archive -->|"available image URLs; no actor image vision"| Gallery

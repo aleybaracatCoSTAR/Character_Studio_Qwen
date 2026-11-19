@@ -1,4 +1,12 @@
-# Latest change: developer architecture handoff and gallery browsing context, 9 November 2026
+# Latest change: character and archive developer handoff with pictures, 19 November 2026
+
+The main README and [developer architecture handoff](DEVELOPER_ARCHITECTURE.md) now focus on Character Studio and Art Archive Studio using the reference `quality-3gpu` baseline: CPU Faster-Whisper, the Qwen3-30B-A3B-Instruct-2507 actor, the separate Qwen3-32B director and Drama 3 voice. The main diagram shows archive/context delivery to both text models, whole-text synthesis, streamed playback and separate browser image display. Other experiments remain in the repository but no longer lead this handoff.
+
+Embedded screenshots show character creation, the gallery, voice delivery and narrative controls. [Screenshots and captions](SCREENSHOTS.md) distinguish design previews and the explicitly labelled request-inspector test fixture from real inference. The local preview recipe now includes `--live --preview`, selecting this UI instead of the earlier recorded-turn prototype. The handoff explains that Robin's starter defaults to director/narrative off even though the three-GPU launcher loads the separate director server.
+
+This is a documentation and image update. Application prompts, dependencies, model pins, runtime code and archive data are unchanged. Container packaging, an application-level OpenAI-compatible facade, semantic embeddings and the proposed conversational-prompt changes remain unimplemented. No new GPU or acoustic-quality result is claimed. The preceding runtime change passed 965 Python and 323 Node checks; those are historical results, not a fresh GPU validation of this documentation update.
+
+# Previous change: developer architecture handoff and gallery browsing context, 9 November 2026
 
 [Developer architecture and container handoff](DEVELOPER_ARCHITECTURE.md) reconciles the current Drama/native Omni routes, checkpoint sizes, CPU/GPU placement, API and live-audio contracts, archive/browser persistence and repository entry points. It proposes separate frontend/backend and model containers, private model networking, persistent volumes and a versioned application-level OpenAI-compatible facade. The container build/deployment and facade are not implemented. Standalone Mermaid sources and SVG diagrams are in `docs/diagrams/`.
 
